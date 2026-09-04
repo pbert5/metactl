@@ -138,6 +138,19 @@ def test_human_aliases_preserve_action_ids_and_redact_projection(capsys):
     assert result["result"]["controller"]["credential"] == "<redacted>"
 
 
+def test_runs_group_supports_bounded_filters_and_json(capsys):
+    module = _metactl_module()
+    class Fake:
+        def __init__(self): self.calls = []
+        def action(self, action_id, parameters):
+            self.calls.append((action_id, parameters))
+            return {"runs": []}
+    fake = Fake()
+    assert module.main(["runs", "list", "--controller-id", "edge/a", "--state", "paused", "--limit", "7", "--json"], transport=fake) == 0
+    json.loads(capsys.readouterr().out)
+    assert fake.calls == [("evolver.runs.list", {"controller_id": "edge/a", "state": "paused", "limit": 7})]
+
+
 @pytest.mark.parametrize(("command", "action_id"), [
     (("control", "status"), "evolver.edge.status"),
     (("control", "controllers"), "evolver.controllers.list"),

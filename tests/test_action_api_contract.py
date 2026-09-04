@@ -43,6 +43,19 @@ def test_transport_expands_and_encodes_catalog_route():
     assert seen == {"url": "http://central/api/evolver/controllers/a%2Fb", "method": "GET"}
 
 
+def test_transport_maps_optional_get_parameters_to_query_string():
+    seen = {}
+    def sender(url, method, body, headers, timeout):
+        seen.update(url=url, method=method, body=body)
+        return 200, b"{}"
+    HTTPTransport(base_url="http://central", sender=sender).action(
+        "evolver.runs.list", {"controller_id": "edge/a", "state": "paused", "limit": 10})
+    assert seen == {
+        "url": "http://central/api/evolver/runs?controller_id=edge%2Fa&state=paused&limit=10",
+        "method": "GET", "body": None,
+    }
+
+
 def _missing_route_parameters():
     for action_id, contract in sorted(_catalog().api.items()):
         for name in re.findall(r"\{([^{}]+)\}", contract["path"]):

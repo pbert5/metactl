@@ -12,7 +12,7 @@ import json
 import os
 from pathlib import Path
 import re
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from http import HTTPStatus
 from typing import Any, Callable, Mapping, Protocol
 from urllib.error import HTTPError, URLError
@@ -132,8 +132,14 @@ class InProcessTransport:
     def action(self, action_id: str, parameters: Mapping[str, Any]) -> Json:
         route, action = action_contract(action_id)
         body = None if route.method == "GET" else {"action": action_id.rsplit(".", 1)[-1], **dict(parameters)}
+        path = route.path(parameters)
+        if route.method == "GET":
+            query = [(name, value) for name, value in parameters.items()
+                     if name not in re.findall(r"\{([^{}]+)\}", route.template)]
+            if query:
+                path += "?" + urlencode(query, doseq=True)
         try:
-            response = self.dispatcher(route.method, route.path(parameters), body, self.headers)
+            response = self.dispatcher(route.method, path, body, self.headers)
             status, payload = response
             return _normalize(int(status), payload)
         except TransportError:
@@ -154,8 +160,14 @@ class HTTPTransport:
     def action(self, action_id: str, parameters: Mapping[str, Any]) -> Json:
         route, action = action_contract(action_id)
         body = None if route.method == "GET" else {"action": action_id.rsplit(".", 1)[-1], **dict(parameters)}
+        path = route.path(parameters)
+        if route.method == "GET":
+            query = [(name, value) for name, value in parameters.items()
+                     if name not in re.findall(r"\{([^{}]+)\}", route.template)]
+            if query:
+                path += "?" + urlencode(query, doseq=True)
         try:
-            status, raw_payload = self.sender(self.base_url + route.path(parameters), route.method, body, self.headers, self.timeout)
+            status, raw_payload = self.sender(self.base_url + path, route.method, body, self.headers, self.timeout)
             status = int(status)
             try:
                 payload = _decode(raw_payload, status) if raw_payload is not None else None
