@@ -10,6 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import os
+from pathlib import Path
+import re
+from urllib.parse import quote
 from http import HTTPStatus
 from typing import Any, Callable, Mapping, Protocol
 from urllib.error import HTTPError, URLError
@@ -29,46 +32,31 @@ class Route:
 
     def path(self, parameters: Mapping[str, Any]) -> str:
         try:
-            return self.template.format(**parameters)
+            values = {name: quote(str(parameters[name]), safe="") for name in re.findall(r"\{([^{}]+)\}", self.template)}
+            return self.template.format(**values)
         except (KeyError, ValueError) as exc:
             raise TransportError("bad_request", f"missing route parameter: {exc}") from exc
 
 
-# These are central API routes, not implementation imports or arbitrary URLs.
-ROUTE_BINDINGS: dict[str, Route] = {
-    "evolver.edge.status": Route("GET", "/api/evolver/controllers"),
-    "evolver.edge.controllers": Route("GET", "/api/evolver/controllers"),
-    "evolver.edge.instruments": Route("GET", "/api/evolver/instruments"),
-    "evolver.edge.runs": Route("GET", "/api/evolver/runs"),
-    "evolver.run.start": Route("POST", "/api/evolver/runs/{run_id}/commands", "evolver:runs:write"),
-    "evolver.run.pause": Route("POST", "/api/evolver/runs/{run_id}/commands", "evolver:runs:write"),
-    "evolver.run.stop": Route("POST", "/api/evolver/runs/{run_id}/commands", "evolver:runs:write"),
-    "evolver.controllers.list": Route("GET", "/api/evolver/controllers"),
-    "evolver.controllers.show": Route("GET", "/api/evolver/controllers/{controller_id}"),
-    "evolver.controllers.freshness": Route("GET", "/api/evolver/controllers/{controller_id}/sync-freshness"),
-    "evolver.controllers.refresh": Route("POST", "/api/evolver/controllers/{controller_id}/refresh", "manage_controller"),
-    "evolver.controllers.rescan": Route("POST", "/api/evolver/controllers/{controller_id}/hardware-rescan", "manage_controller"),
-    "evolver.controllers.archive": Route("POST", "/api/evolver/controllers/{controller_id}/archive", "manage_controller"),
-    "evolver.controllers.restore": Route("POST", "/api/evolver/controllers/{controller_id}/restore", "manage_controller"),
-    "evolver.controllers.add": Route("POST", "/api/evolver/enrollment-tokens", "manage_controller"),
-    "evolver.controllers.release.set": Route("POST", "/api/evolver/controllers/{controller_id}/desired-release", "update_controller"),
-    "evolver.controllers.commands.list": Route("GET", "/api/evolver/controllers/{controller_id}/commands"),
-    "evolver.controllers.commands.show": Route("GET", "/api/evolver/controllers/{controller_id}/commands/{command_id}"),
-    "evolver.controllers.recovery.request": Route("POST", "/api/evolver/controllers/{controller_id}/recovery", "recover_controller"),
-    "evolver.controllers.recovery.status": Route("GET", "/api/evolver/controllers/{controller_id}/recovery"),
-    "evolver.controllers.recovery.diff": Route("GET", "/api/evolver/controllers/{controller_id}/recovery/diff"),
-    "evolver.instruments.list": Route("GET", "/api/evolver/instruments"),
-    "evolver.instruments.show": Route("GET", "/api/evolver/instruments/{instrument_id}"),
-    "evolver.runs.list": Route("GET", "/api/evolver/runs"),
-    "evolver.runs.show": Route("GET", "/api/evolver/runs/{run_id}"),
-    "evolver.runs.pause": Route("POST", "/api/evolver/runs/{run_id}/commands", "operate_run"),
-    "evolver.runs.resume": Route("POST", "/api/evolver/runs/{run_id}/commands", "operate_run"),
-    "evolver.runs.stop": Route("POST", "/api/evolver/runs/{run_id}/commands", "operate_run"),
-    "evolver.experiments.validate": Route("POST", "/api/evolver/experiments/validate"),
-    "evolver.experiments.describe": Route("POST", "/api/evolver/experiments/describe"),
-    "evolver.experiments.plan": Route("POST", "/api/evolver/experiments/plan"),
-    "evolver.release.build": Route("POST", "/api/evolver/releases/build", "update_controller"),
-}
+_CATALOG_PATH = Path(__file__).with_name("applications") / "evolver" / "actions.json"
+
+
+def action_contract(action_id: str) -> tuple[Route, dict[str, Any]]:
+    """Resolve transport mechanics from the validated canonical catalog."""
+    from framework.action_catalog import load_action_catalog
+    catalog = load_action_catalog(_CATALOG_PATH)
+    action = catalog.action(action_id)
+    contract = catalog.api.get(action_id)
+    if action is None or contract is None:
+        raise TransportError("unknown_action", f"no operator API contract for {action_id}")
+    permissions = action.get("permissions", [])
+    permission = permissions[0] if len(permissions) == 1 else None
+    return Route(contract["method"], contract["path"], permission), action
+
+
+def operator_action_ids() -> frozenset[str]:
+    from framework.action_catalog import load_action_catalog
+    return frozenset(load_action_catalog(_CATALOG_PATH).api)
 
 
 class Transport(Protocol):
@@ -136,9 +124,7 @@ class InProcessTransport:
         self.dispatcher, self.headers = dispatcher, dict(headers or {})
 
     def action(self, action_id: str, parameters: Mapping[str, Any]) -> Json:
-        route = ROUTE_BINDINGS.get(action_id)
-        if route is None:
-            raise TransportError("unknown_action", f"no central route for {action_id}")
+        route, action = action_contract(action_id)
         body = None if route.method == "GET" else {"action": action_id.rsplit(".", 1)[-1], **dict(parameters)}
         try:
             response = self.dispatcher(route.method, route.path(parameters), body, self.headers)
@@ -160,9 +146,7 @@ class HTTPTransport:
         self.headers = _headers(operator=operator, token=token, shared_secret=shared_secret, permissions=permissions)
 
     def action(self, action_id: str, parameters: Mapping[str, Any]) -> Json:
-        route = ROUTE_BINDINGS.get(action_id)
-        if route is None:
-            raise TransportError("unknown_action", f"no central route for {action_id}")
+        route, action = action_contract(action_id)
         body = None if route.method == "GET" else {"action": action_id.rsplit(".", 1)[-1], **dict(parameters)}
         try:
             status, raw_payload = self.sender(self.base_url + route.path(parameters), route.method, body, self.headers, self.timeout)

@@ -17,7 +17,7 @@ REPOSITORY_ROOT = Path(os.environ.get("META_WEBUI_REPOSITORY_ROOT", Path(__file_
 
 from framework.action_catalog import ActionCatalogError, load_action_catalog
 from meta_webui_ui_runtime_textual.cli import run_cli
-from tools.metactl_transport import ROUTE_BINDINGS, TransportError, configured_transport
+from tools.metactl_transport import TransportError, configured_transport, operator_action_ids
 
 
 def _catalog_paths(index_path: Path) -> list[Path]:
@@ -96,7 +96,7 @@ def _registry(transport: Any) -> dict[str, Any]:
         except TransportError as error:
             return error.as_dict()
     return {action_id: (lambda params, action_id=action_id: invoke(params, action_id))
-            for action_id in ROUTE_BINDINGS}
+            for action_id in operator_action_ids()}
 
 
 _HUMAN_ALIASES = {

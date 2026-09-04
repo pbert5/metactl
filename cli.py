@@ -17,7 +17,7 @@ REPOSITORY_ROOT = Path(os.environ.get("META_WEBUI_REPOSITORY_ROOT", Path(__file_
 
 from .framework.action_catalog import ActionCatalogError, load_action_catalog
 from .meta_webui_ui_runtime_textual.cli import run_cli
-from .metactl_transport import ROUTE_BINDINGS, TransportError, configured_transport
+from .metactl_transport import TransportError, configured_transport, operator_action_ids
 
 
 def _catalog_paths(index_path: Path) -> list[Path]:
@@ -111,7 +111,7 @@ def _registry(transport: Any) -> dict[str, Any]:
         except TransportError as error:
             return error.as_dict()
     return {action_id: (lambda params, action_id=action_id: invoke(params, action_id))
-            for action_id in ROUTE_BINDINGS}
+            for action_id in operator_action_ids()}
 
 
 _HUMAN_ALIASES = {
@@ -247,7 +247,7 @@ def _watch(arguments: list[str], transport: Any, *, as_json: bool) -> int | None
 
 
 def main(argv: list[str] | None = None, *, transport: Any | None = None) -> int:
-    index_path = Path(__file__).with_name("actions.json")
+    index_path = Path(__file__).with_name("applications") / "evolver" / "actions.json"
     try:
         arguments = list(sys.argv[1:] if argv is None else argv)
         # Human-facing grouped aliases remain presentation-only; the action ID

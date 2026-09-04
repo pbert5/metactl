@@ -20,7 +20,7 @@ class ActionCatalogError(ValueError):
 
 _VERSION = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
-_TOP_LEVEL = {"version", "deployment_index", "actions"}
+_TOP_LEVEL = {"version", "deployment_index", "actions", "api"}
 _ACTION = {"id", "title", "description", "tags", "status", "registry", "evidence", "safety", "permissions", "parameters", "replacement"}
 _REGISTRY = {"id", "binding"}
 _EVIDENCE = {"kind", "source", "tests"}
@@ -38,6 +38,7 @@ class ActionCatalog:
     version: str
     deployment_index: tuple[str, ...]
     actions: tuple[dict[str, Any], ...]
+    api: dict[str, dict[str, Any]]
 
     def action(self, identifier: str) -> dict[str, Any] | None:
         return next((action for action in self.actions if action["id"] == identifier), None)
@@ -47,6 +48,7 @@ class ActionCatalog:
             "version": self.version,
             "deployment_index": list(self.deployment_index),
             "actions": [dict(action) for action in self.actions],
+            "api": {key: dict(value) for key, value in self.api.items()},
         }
 
 
@@ -95,7 +97,31 @@ def parse_action_catalog(document: Mapping[str, Any], *, source: Path | str = "c
         missing = sorted(set(index) - set(by_id))
         extra = sorted(set(by_id) - set(index))
         raise ActionCatalogError(f"{label}: deployment_index mismatch (missing={missing}, extra={extra})")
-    return ActionCatalog(version, tuple(index), tuple(by_id[identifier] for identifier in index))
+    api = document.get("api", {})
+    if not isinstance(api, Mapping):
+        raise ActionCatalogError(f"{label}: api must be an object")
+    for identifier, contract in api.items():
+        api_label = f"{label}.api[{identifier!r}]"
+        if identifier not in by_id:
+            raise ActionCatalogError(f"{api_label}: unknown action id")
+        _mapping(contract, api_label)
+        _keys(contract, {"method", "path", "operator_api"}, api_label)
+        if contract.get("operator_api", True) is not True:
+            raise ActionCatalogError(f"{api_label}.operator_api must be true")
+        if contract.get("method") not in {"GET", "POST", "PATCH", "DELETE"}:
+            raise ActionCatalogError(f"{api_label}.method must be an HTTP method")
+        path = contract.get("path")
+        if not isinstance(path, str) or not path.startswith("/api/") or "{" in path and "}" not in path:
+            raise ActionCatalogError(f"{api_label}.path must be an /api/ path template")
+        placeholders = set(re.findall(r"\{([^{}]+)\}", path))
+        parameters = by_id[identifier].get("parameters", {})
+        unknown = placeholders - set(parameters)
+        if unknown:
+            raise ActionCatalogError(f"{api_label}: path parameters not declared: {sorted(unknown)}")
+        missing = {name for name in placeholders if not isinstance(parameters.get(name), Mapping) or parameters[name].get("required") is not True}
+        if missing:
+            raise ActionCatalogError(f"{api_label}: path parameters must be declared required: {sorted(missing)}")
+    return ActionCatalog(version, tuple(index), tuple(by_id[identifier] for identifier in index), {key: dict(value) for key, value in api.items()})
 
 
 def validate_action_catalog(document: Mapping[str, Any], *, source: Path | str = "catalog") -> None:
