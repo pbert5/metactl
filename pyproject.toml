@@ -8,6 +8,14 @@ requires-python = ">=3.10"
 dependencies = ["PyYAML>=6"]
 [project.scripts]
 metactl = "metactl.cli:main"
+
+[tool.setuptools]
+package-dir = {"metactl" = ".", "metactl.framework" = "framework", "metactl.meta_webui_ui_runtime_textual" = "meta_webui_ui_runtime_textual"}
+packages = ["metactl", "metactl.framework", "metactl.meta_webui_ui_runtime_textual"]
+
+[tool.setuptools.package-data]
+metactl = ["applications/**/*.json"]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]

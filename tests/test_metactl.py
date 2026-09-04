@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 from pathlib import Path
 
@@ -222,6 +223,29 @@ def test_metactl_release_build_presents_grouped_action_and_central_route(capsys)
     result = json.loads(capsys.readouterr().out)
     assert result["result"]["status"] == "built"
     assert fake.calls == [("evolver.release.build", {"output": "releases/evolver", "version": "1.2.3"})]
+
+
+def test_interactive_mode_selects_from_catalog_and_dispatches():
+    module = _metactl_module()
+
+    class Fake:
+        def __init__(self):
+            self.calls = []
+
+        def action(self, action_id, parameters):
+            self.calls.append((action_id, parameters))
+            return {"ok": True}
+
+    fake = Fake()
+    layout = module._layout(ROOT / "applications/deployment/action-catalog.json")
+    available = [item for item in layout["actions"].values() if item["available"]]
+    chosen = next(item for item in available if item["parameters"] == {})
+    output = io.StringIO()
+    assert module.main(["interactive"], transport=fake,
+                       input=io.StringIO(f"{available.index(chosen) + 1}\n"),
+                       output=output) == 0
+    assert fake.calls == [(chosen["id"], {})]
+    assert "Choose an action" in output.getvalue()
 
 
 def test_central_http_transport_binds_release_build_route():

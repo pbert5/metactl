@@ -123,6 +123,8 @@ _HUMAN_ALIASES = {
     ("controllers", "adopt"): "evolver.controllers.add",
     ("controllers", "refresh"): "evolver.controllers.refresh",
     ("controllers", "rescan"): "evolver.controllers.rescan",
+    ("controllers", "archive"): "evolver.controllers.archive",
+    ("controllers", "restore"): "evolver.controllers.restore",
     ("controllers", "commands", "list"): "evolver.controllers.commands.list",
     ("controllers", "commands", "show"): "evolver.controllers.commands.show",
     ("controllers", "recovery", "request"): "evolver.controllers.recovery.request",
@@ -138,6 +140,44 @@ _HUMAN_ALIASES = {
     ("runs", "stop"): "evolver.runs.stop",
     ("releases", "build"): "evolver.release.build",
 }
+
+
+def _interactive(arguments: list[str], index_path: Path, transport: Any, *, input_stream: Any = None,
+                  output: Any = None) -> int | None:
+    """Run a small catalog-driven prompt for operators at a real terminal."""
+    if arguments != ["interactive"]:
+        return None
+    layout = _layout(index_path)
+    actions = [entry for entry in layout["actions"].values() if entry["available"]]
+    if not actions:
+        raise ValueError("the action catalog has no available actions")
+    input_stream = input_stream or sys.stdin
+    output = output or sys.stdout
+    output.write("metactl interactive\n")
+    for number, action in enumerate(actions, 1):
+        output.write(f"{number}) {action['title']} [{action['id']}]\n")
+    output.write("Choose an action (q to quit): ")
+    choice = input_stream.readline().strip()
+    if choice.lower() in {"", "q", "quit", "exit"}:
+        return 0
+    try:
+        action = actions[int(choice) - 1]
+    except (ValueError, IndexError) as error:
+        raise ValueError("interactive choice must be a listed action number") from error
+    command = [action["id"]]
+    for name, spec in action.get("parameters", {}).items():
+        if "default" in spec:
+            prompt = f"{name} [{spec['default']}]: "
+        else:
+            prompt = f"{name}{' (required)' if spec.get('required') else ''}: "
+        output.write(prompt)
+        value = input_stream.readline()
+        value = value.strip()
+        if not value and "default" in spec:
+            value = str(spec["default"])
+        if value:
+            command.extend([f"--{name.replace('_', '-')}", value])
+    return run_cli(layout, _registry(transport), command, input=input_stream, output=output)
 
 
 def _human_arguments(arguments: list[str]) -> list[str]:
@@ -246,13 +286,18 @@ def _watch(arguments: list[str], transport: Any, *, as_json: bool) -> int | None
     return 0
 
 
-def main(argv: list[str] | None = None, *, transport: Any | None = None) -> int:
+def main(argv: list[str] | None = None, *, transport: Any | None = None,
+         input: Any | None = None, output: Any | None = None) -> int:
     index_path = Path(__file__).with_name("applications") / "evolver" / "actions.json"
     try:
         arguments = list(sys.argv[1:] if argv is None else argv)
         # Human-facing grouped aliases remain presentation-only; the action ID
         # is the stable contract and still drives the same explicit binding.
         chosen_transport = transport or configured_transport()
+        interactive_result = _interactive(arguments, index_path, chosen_transport,
+                                          input_stream=input, output=output)
+        if interactive_result is not None:
+            return interactive_result
         watch_result = _watch(arguments, chosen_transport, as_json="--json" in arguments)
         if watch_result is not None:
             return watch_result

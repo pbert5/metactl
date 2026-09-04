@@ -43,7 +43,10 @@ _CATALOG_PATH = Path(__file__).with_name("applications") / "evolver" / "actions.
 
 def action_contract(action_id: str) -> tuple[Route, dict[str, Any]]:
     """Resolve transport mechanics from the validated canonical catalog."""
-    from framework.action_catalog import load_action_catalog
+    try:
+        from .framework.action_catalog import load_action_catalog
+    except ImportError:  # checkout compatibility for the legacy tools wrapper
+        from framework.action_catalog import load_action_catalog
     catalog = load_action_catalog(_CATALOG_PATH)
     action = catalog.action(action_id)
     contract = catalog.api.get(action_id)
@@ -55,7 +58,10 @@ def action_contract(action_id: str) -> tuple[Route, dict[str, Any]]:
 
 
 def operator_action_ids() -> frozenset[str]:
-    from framework.action_catalog import load_action_catalog
+    try:
+        from .framework.action_catalog import load_action_catalog
+    except ImportError:  # checkout compatibility for the legacy tools wrapper
+        from framework.action_catalog import load_action_catalog
     return frozenset(load_action_catalog(_CATALOG_PATH).api)
 
 
