@@ -15,9 +15,14 @@ from typing import Any, Mapping
 
 REPOSITORY_ROOT = Path(os.environ.get("META_WEBUI_REPOSITORY_ROOT", Path(__file__).resolve().parents[1]))
 
-from .framework.action_catalog import ActionCatalogError, load_action_catalog
-from .meta_webui_ui_runtime_textual.cli import run_cli
-from .metactl_transport import TransportError, configured_transport, operator_action_ids
+try:
+    from .framework.action_catalog import ActionCatalogError, load_action_catalog
+    from .meta_webui_ui_runtime_textual.cli import run_cli
+    from .metactl_transport import TransportError, configured_transport, operator_action_ids
+except ImportError:  # direct loading from the extracted checkout
+    from framework.action_catalog import ActionCatalogError, load_action_catalog
+    from meta_webui_ui_runtime_textual.cli import run_cli
+    from metactl_transport import TransportError, configured_transport, operator_action_ids
 
 
 def _catalog_paths(index_path: Path) -> list[Path]:
@@ -127,6 +132,12 @@ _HUMAN_ALIASES = {
     ("controllers", "restore"): "evolver.controllers.restore",
     ("controllers", "commands", "list"): "evolver.controllers.commands.list",
     ("controllers", "commands", "show"): "evolver.controllers.commands.show",
+    ("controllers", "measurements"): "evolver.controllers.measurements",
+    ("controllers", "telemetry"): "evolver.controllers.telemetry",
+    ("controllers", "activities"): "evolver.controllers.activities",
+    ("controllers", "events"): "evolver.controllers.events",
+    ("controllers", "evidence"): "evolver.controllers.evidence",
+    ("controllers", "logs"): "evolver.controllers.logs",
     ("controllers", "recovery", "request"): "evolver.controllers.recovery.request",
     ("controllers", "recovery", "status"): "evolver.controllers.recovery.status",
     ("controllers", "recovery", "diff"): "evolver.controllers.recovery.diff",
@@ -230,7 +241,8 @@ _TERMINAL_DISPOSITIONS = frozenset({
 })
 
 
-def _watch(arguments: list[str], transport: Any, *, as_json: bool) -> int | None:
+def _watch(arguments: list[str], transport: Any, *, as_json: bool,
+           output: Any = None) -> int | None:
     prefix = ("controllers", "commands", "watch")
     leading = 0
     while leading < len(arguments) and arguments[leading] in {"--json", "--dry-run", "--yes"}:
@@ -282,7 +294,8 @@ def _watch(arguments: list[str], transport: Any, *, as_json: bool) -> int | None
                            "accepted_or_queued": disposition in {"accepted", "queued"},
                            "physical_actuation_verified": bool(
                                isinstance(command, Mapping) and command.get("physical_actuation_verified") is True)}}
-    print(json.dumps(payload, sort_keys=True, default=str))
+    output = output or sys.stdout
+    output.write(json.dumps(payload, sort_keys=True, default=str) + "\n")
     return 0
 
 
@@ -298,7 +311,8 @@ def main(argv: list[str] | None = None, *, transport: Any | None = None,
                                           input_stream=input, output=output)
         if interactive_result is not None:
             return interactive_result
-        watch_result = _watch(arguments, chosen_transport, as_json="--json" in arguments)
+        watch_result = _watch(arguments, chosen_transport, as_json="--json" in arguments,
+                              output=output)
         if watch_result is not None:
             return watch_result
         return run_cli(_layout(index_path), _registry(chosen_transport), _human_arguments(arguments))

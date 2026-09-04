@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import ast
 import io
 import json
 from pathlib import Path
@@ -281,3 +282,26 @@ def test_central_http_transport_normalizes_malformed_and_network_failures():
         with pytest.raises(TransportError) as raised:
             HTTPTransport(base_url="http://central.test", sender=sender).action("evolver.edge.controllers", {})
         assert raised.value.as_dict()["kind"] == kind
+
+
+def test_legacy_entrypoints_are_forwarding_shims_only():
+    for path in (ROOT / "metactl.py", ROOT / "tools/metactl.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        assert not [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
+        assert "_canonical" in path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("kind", ["measurements", "telemetry", "activities", "events", "evidence", "logs"])
+def test_fact_aliases_forward_controller_filters(capsys, kind):
+    module = _metactl_module()
+
+    class Fake:
+        def __init__(self): self.calls = []
+        def action(self, action_id, parameters):
+            self.calls.append((action_id, parameters))
+            return {kind: []}
+
+    fake = Fake()
+    assert module.main(["--json", "controllers", kind, "central-a", "--run-id", "run-1", "--limit", "4"], transport=fake) == 0
+    json.loads(capsys.readouterr().out)
+    assert fake.calls == [(f"evolver.controllers.{kind}", {"controller_id": "central-a", "run_id": "run-1", "limit": 4})]
