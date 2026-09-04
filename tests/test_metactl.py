@@ -200,7 +200,7 @@ def test_central_http_transport_binds_route_headers_and_body():
     assert client.action("evolver.runs.pause", {"run_id": "run-a", "expected_revision": 1}) == {"accepted": True}
     assert seen["url"] == "http://central.test/api/evolver/runs/run-a/commands"
     assert seen["method"] == "POST"
-    assert seen["body"] == {"action": "pause", "run_id": "run-a"}
+    assert seen["body"] == {"action": "pause", "run_id": "run-a", "expected_revision": 1}
     assert seen["headers"]["Authorization"] == "Bearer secret"
     assert seen["headers"]["X-Meta-Webui-Evolver-Operator"] == "alice"
     assert seen["headers"]["X-Meta-Webui-Evolver-Control-Secret"] == "proxy"
