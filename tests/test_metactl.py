@@ -195,7 +195,9 @@ def test_central_http_transport_binds_route_headers_and_body():
     client = HTTPTransport(base_url="http://central.test/", sender=sender,
                            operator="alice", token="secret", shared_secret="proxy",
                            permissions="evolver:runs:write")
-    assert client.action("evolver.run.pause", {"run_id": "run-a"}) == {"accepted": True}
+    # The run.* entries are planned catalog surfaces; the implemented
+    # revision-fenced operator action is runs.pause.
+    assert client.action("evolver.runs.pause", {"run_id": "run-a", "expected_revision": 1}) == {"accepted": True}
     assert seen["url"] == "http://central.test/api/evolver/runs/run-a/commands"
     assert seen["method"] == "POST"
     assert seen["body"] == {"action": "pause", "run_id": "run-a"}
