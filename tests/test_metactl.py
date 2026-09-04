@@ -10,6 +10,24 @@ from framework.action_catalog import load_action_catalog
 
 
 ROOT = Path(__file__).parents[1]
+CATALOG = ROOT / "applications" / "evolver" / "actions.json"
+
+
+def _evolver_catalog():
+    return load_action_catalog(CATALOG)
+
+
+def _cli_value(spec):
+    return {"string": "value", "integer": "1", "number": "1.5", "boolean": "true",
+            "object": "{}", "array": "[]", "json": "{}"}[spec.get("type", "string")]
+
+
+def _required_arguments(action):
+    arguments = []
+    for name, spec in action["parameters"].items():
+        if spec.get("required"):
+            arguments.extend([f"--{name.replace('_', '-')}", _cli_value(spec)])
+    return arguments
 
 
 def _metactl_module():
@@ -48,6 +66,56 @@ def test_metactl_planned_actions_never_dispatch(tmp_path, monkeypatch, capsys):
     result = json.loads(capsys.readouterr().out)
     assert result["status"] == "planned"
     assert result["reason"] == "unavailable"
+
+
+@pytest.mark.parametrize("action_id", [
+    action["id"] for action in load_action_catalog(CATALOG).actions
+    if action["status"] != "implemented"
+])
+def test_every_non_implemented_catalog_action_is_cli_negative_and_never_dispatches(capsys, action_id):
+    module = _metactl_module()
+
+    class Fake:
+        def __init__(self):
+            self.calls = []
+
+        def action(self, action_id, parameters):
+            self.calls.append((action_id, parameters))
+            return {"unexpected": True}
+
+    fake = Fake()
+    action = _evolver_catalog().action(action_id)
+    assert action is not None
+    assert module.main(["--json", action_id, *_required_arguments(action)], transport=fake) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result == {"action": action_id, "parameters": {
+        name: json.loads(_cli_value(spec)) if spec["type"] in {"json", "object", "array"}
+        else int(_cli_value(spec)) if spec["type"] == "integer"
+        else float(_cli_value(spec)) if spec["type"] == "number"
+        else _cli_value(spec)
+        for name, spec in action["parameters"].items() if spec.get("required")
+    }, "reason": "unavailable", "status": "planned"}
+    assert fake.calls == []
+
+
+@pytest.mark.parametrize("action_id", [action["id"] for action in load_action_catalog(CATALOG).actions])
+def test_every_catalog_action_rejects_a_missing_required_cli_parameter(capsys, action_id):
+    module = _metactl_module()
+    action = _evolver_catalog().action(action_id)
+    assert action is not None
+    required = [name for name, spec in action["parameters"].items() if spec.get("required")]
+    missing = required[0] if required else None
+    arguments = ["--json", action_id]
+    for name, spec in action["parameters"].items():
+        if spec.get("required") and name != missing:
+            arguments.extend([f"--{name.replace('_', '-')}", _cli_value(spec)])
+    if missing is None:
+        arguments.append("--not-a-catalog-parameter")
+
+    with pytest.raises(SystemExit) as raised:
+        module.main(arguments, transport=object())
+    assert raised.value.code == 2
+    assert "required" in capsys.readouterr().err or missing is None
 
 
 def test_human_aliases_preserve_action_ids_and_redact_projection(capsys):
