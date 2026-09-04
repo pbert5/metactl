@@ -207,7 +207,8 @@ def run_cli(layout: Mapping[str, Any] | str, registry: Mapping[str, ActionHandle
     parameters = {name: getattr(args, name) for name in action.parameters if getattr(args, name, None) is not None}
     planned = {"status": "planned", "action": action.name, "parameters": parameters}
     if not action.available or action.planned:
-        _emit({**planned, "reason": "unavailable"}, as_json=args.json, output=output)
+        _emit({"status": action.status, "action": action.name, "parameters": parameters, "reason": "unavailable"},
+              as_json=args.json, output=output)
         return 0
     if args.dry_run:
         _emit(planned, as_json=args.json, output=output)

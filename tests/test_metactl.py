@@ -59,12 +59,12 @@ def test_metactl_read_bindings_use_injected_central_transport(capsys):
     assert fake.calls == [("evolver.edge.controllers", {})]
 
 
-def test_metactl_planned_actions_never_dispatch(tmp_path, monkeypatch, capsys):
+def test_metactl_unavailable_actions_never_dispatch(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("EVOLVER_STATE_ROOT", str(tmp_path))
     module = _metactl_module()
     assert module.main(["--json", "evolver.run.start", "--run-id", "r", "--bundle-id", "b"]) == 0
     result = json.loads(capsys.readouterr().out)
-    assert result["status"] == "planned"
+    assert result["status"] == _evolver_catalog().action("evolver.run.start")["status"]
     assert result["reason"] == "unavailable"
 
 
@@ -94,7 +94,7 @@ def test_every_non_implemented_catalog_action_is_cli_negative_and_never_dispatch
         else float(_cli_value(spec)) if spec["type"] == "number"
         else _cli_value(spec)
         for name, spec in action["parameters"].items() if spec.get("required")
-    }, "reason": "unavailable", "status": "planned"}
+    }, "reason": "unavailable", "status": action["status"]}
     assert fake.calls == []
 
 
