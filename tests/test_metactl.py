@@ -138,6 +138,33 @@ def test_human_aliases_preserve_action_ids_and_redact_projection(capsys):
     assert result["result"]["controller"]["credential"] == "<redacted>"
 
 
+@pytest.mark.parametrize(("command", "action_id"), [
+    (("control", "status"), "evolver.edge.status"),
+    (("control", "controllers"), "evolver.controllers.list"),
+    (("control", "instruments"), "evolver.instruments.list"),
+    (("control", "runs"), "evolver.runs.list"),
+    (("validation", "experiment"), "evolver.experiments.validate"),
+])
+def test_operator_group_aliases_map_to_existing_catalog_actions(capsys, command, action_id):
+    module = _metactl_module()
+
+    class Fake:
+        def __init__(self): self.calls = []
+        def action(self, action, parameters):
+            self.calls.append((action, parameters))
+            return {"action": action}
+
+    fake = Fake()
+    arguments = ["--json", *command]
+    if action_id == "evolver.experiments.validate":
+        arguments += ["--definition", "{}", "--resolved-at", "2026-01-01T00:00:00Z"]
+    assert module.main(arguments, transport=fake) == 0
+    json.loads(capsys.readouterr().out)
+    expected = {"definition": {}, "selected_calibration_artifacts": [],
+                "resolved_at": "2026-01-01T00:00:00Z"} if action_id.endswith("validate") else {}
+    assert fake.calls == [(action_id, expected)]
+
+
 def test_adopt_is_explicitly_forced_and_confirmation_preserving(capsys):
     module = _metactl_module()
 

@@ -121,6 +121,10 @@ def _registry(transport: Any) -> dict[str, Any]:
 
 _HUMAN_ALIASES = {
     ("status",): "evolver.edge.status",
+    ("control", "status"): "evolver.edge.status",
+    ("control", "controllers"): "evolver.controllers.list",
+    ("control", "instruments"): "evolver.instruments.list",
+    ("control", "runs"): "evolver.runs.list",
     ("controllers", "list"): "evolver.controllers.list",
     ("controllers", "show"): "evolver.controllers.show",
     ("controllers", "freshness"): "evolver.controllers.freshness",
@@ -149,6 +153,8 @@ _HUMAN_ALIASES = {
     ("runs", "pause"): "evolver.runs.pause",
     ("runs", "resume"): "evolver.runs.resume",
     ("runs", "stop"): "evolver.runs.stop",
+    ("validation", "experiment"): "evolver.experiments.validate",
+    ("experiments", "validation"): "evolver.experiments.validate",
     ("releases", "build"): "evolver.release.build",
 }
 
