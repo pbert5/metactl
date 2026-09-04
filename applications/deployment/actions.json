@@ -1,0 +1,17 @@
+{
+  "version": "1.0.0",
+  "deployment_index": ["deployment.config.validate"],
+  "actions": [
+    {
+      "id": "deployment.config.validate",
+      "title": "Validate the assembled deployment configuration",
+      "description": "Check the composed deployment declarations for contract violations.",
+      "tags": ["deployment", "configuration"],
+      "status": "planned",
+      "registry": {"id": "deployment", "binding": "deployment.config.validate"},
+      "safety": {"risk": "low", "confirmation": "none", "reversible": true},
+      "permissions": ["deployment:read"],
+      "parameters": {}
+    }
+  ]
+}

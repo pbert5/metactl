@@ -1,0 +1,17 @@
+{
+  "version": "1.0.0",
+  "deployment_index": ["core.access.status"],
+  "actions": [
+    {
+      "id": "core.access.status",
+      "title": "Show access configuration status",
+      "description": "Inspect configured access capabilities without changing them.",
+      "tags": ["core", "access"],
+      "status": "planned",
+      "registry": {"id": "core", "binding": "core.access.status"},
+      "safety": {"risk": "low", "confirmation": "none", "reversible": true},
+      "permissions": ["access:read"],
+      "parameters": {}
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "version": "1.0.0",
+  "deployment_index": ["core", "evolver", "deployment"],
+  "catalogs": [
+    {"id": "core", "path": "../core/actions.json"},
+    {"id": "evolver", "path": "../evolver/actions.json"},
+    {"id": "deployment", "path": "actions.json"}
+  ]
+}
