@@ -316,6 +316,12 @@ def main(argv: list[str] | None = None, *, transport: Any | None = None,
     index_path = Path(__file__).with_name("applications") / "evolver" / "actions.json"
     try:
         arguments = list(sys.argv[1:] if argv is None else argv)
+        if arguments[:1] == ["api"]:
+            try:
+                from .api_workbench.cli import main as api_main
+            except ImportError:
+                from api_workbench.cli import main as api_main
+            return api_main(arguments[1:], output=output)
         # Human-facing grouped aliases remain presentation-only; the action ID
         # is the stable contract and still drives the same explicit binding.
         chosen_transport = transport or configured_transport()

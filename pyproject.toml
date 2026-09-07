@@ -6,12 +6,16 @@ name = "metactl"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = ["PyYAML>=6"]
+[project.optional-dependencies]
+workbench = ["textual>=0.89,<2", "jsonschema>=4.18,<5"]
+dev = ["pytest>=8", "textual>=0.89,<2", "jsonschema>=4.18,<5"]
 [project.scripts]
 metactl = "metactl.cli:main"
+meta-api-tui = "metactl.api_workbench.cli:tui_main"
 
 [tool.setuptools]
-package-dir = {"metactl" = ".", "metactl.framework" = "framework", "metactl.meta_webui_ui_runtime_textual" = "meta_webui_ui_runtime_textual"}
-packages = ["metactl", "metactl.framework", "metactl.meta_webui_ui_runtime_textual"]
+package-dir = {"metactl" = ".", "metactl.framework" = "framework", "metactl.meta_webui_ui_runtime_textual" = "meta_webui_ui_runtime_textual", "metactl.api_workbench" = "api_workbench"}
+packages = ["metactl", "metactl.framework", "metactl.meta_webui_ui_runtime_textual", "metactl.api_workbench"]
 
 [tool.setuptools.package-data]
 metactl = ["applications/**/*.json"]

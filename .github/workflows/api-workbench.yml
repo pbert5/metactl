@@ -1,0 +1,20 @@
+name: API workbench
+on:
+  push:
+    branches: [api-tui]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  workbench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install standalone component and test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Contract, safety, imports and headless Textual tests
+        run: python -m pytest -q tests/test_api_workbench.py tests/test_action_api_contract.py

@@ -24,7 +24,7 @@ _TOP_LEVEL = {"version", "deployment_index", "actions", "api"}
 _ACTION = {"id", "title", "description", "tags", "status", "registry", "evidence", "safety", "permissions", "parameters", "replacement"}
 _REGISTRY = {"id", "binding"}
 _EVIDENCE = {"kind", "source", "tests"}
-_SAFETY = {"risk", "confirmation", "reversible"}
+_SAFETY = {"risk", "confirmation", "reversible", "effect"}
 _PARAMETER = {"type", "required", "description", "default", "enum"}
 _STATUSES = {"planned", "experimental", "implemented", "deprecated", "partial", "superseded"}
 _EVIDENCE_KINDS = {"software", "configuration", "simulator", "physical", "calibrated"}
@@ -105,7 +105,13 @@ def parse_action_catalog(document: Mapping[str, Any], *, source: Path | str = "c
         if identifier not in by_id:
             raise ActionCatalogError(f"{api_label}: unknown action id")
         _mapping(contract, api_label)
-        _keys(contract, {"method", "path", "operator_api"}, api_label)
+        _keys(contract, {"method", "path", "operator_api", "request_schema", "responses"}, api_label)
+        if "request_schema" in contract and not isinstance(contract["request_schema"], dict):
+            raise ActionCatalogError(f"{api_label}.request_schema must be an object")
+        if "responses" in contract:
+            responses = contract["responses"]
+            if not isinstance(responses, dict) or not all(isinstance(k, str) and (k == "default" or re.fullmatch(r"[1-5](?:[0-9]{2}|XX)", k)) and (v is None or isinstance(v, dict)) for k, v in responses.items()):
+                raise ActionCatalogError(f"{api_label}.responses must map status codes to schemas or null")
         if contract.get("operator_api", True) is not True:
             raise ActionCatalogError(f"{api_label}.operator_api must be true")
         if contract.get("method") not in {"GET", "POST", "PATCH", "DELETE"}:
@@ -167,6 +173,8 @@ def _validate_action(action: Mapping[str, Any], label: str) -> None:
     safety = action.get("safety")
     _mapping(safety, f"{label}.safety")
     _keys(safety, _SAFETY, f"{label}.safety")
+    if "effect" in safety and safety["effect"] not in {"read", "mutation", "destructive", "hardware"}:
+        raise ActionCatalogError(f"{label}.safety.effect is invalid")
     if safety.get("risk") not in {"low", "medium", "high"} or safety.get("confirmation") not in {"none", "operator", "physical", "required"} or not isinstance(safety.get("reversible"), bool):
         raise ActionCatalogError(f"{label}.safety has invalid risk, confirmation, or reversible value")
     permissions = action.get("permissions")
