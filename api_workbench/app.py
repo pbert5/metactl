@@ -234,7 +234,10 @@ class WorkbenchApp(App):
                 if not target:
                     raise WorkbenchError("enter a server URL or use fixtures")
                 if self.session.client is None or self.session.client.base_url != target.rstrip("/"):
+                    if self.session.client is not None:
+                        self.query_one("#request-headers", TextArea).load_text("{}")
                     self.session.client = HTTPClient(target)
+                    self.session.blocked = frozenset()
                     self.drift = None
                     self.query_one("#mode", Static).update(self.mode_label())
                     self.query_one("#drift", TextArea).load_text("Target changed; previous drift comparison is no longer valid.")
