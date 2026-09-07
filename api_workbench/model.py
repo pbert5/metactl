@@ -37,13 +37,13 @@ class Endpoint:
 
     @property
     def effect(self) -> str:
-        explicit = self.safety.get("effect")
-        if explicit in {"read", "mutation", "destructive", "hardware"}:
-            if explicit == "read" and self.method not in {"GET", "HEAD", "OPTIONS"}:
-                return "unknown"
-            return explicit
         if self.safety.get("confirmation") == "physical" or "hardware" in self.tags:
             return "hardware"
+        explicit = self.safety.get("effect")
+        if explicit in {"read", "mutation", "destructive", "hardware"}:
+            if explicit == "read" and (self.method not in {"GET", "HEAD", "OPTIONS"} or self.safety.get("confirmation", "none") != "none"):
+                return "unknown"
+            return explicit
         if self.method in {"GET", "HEAD", "OPTIONS"} and self.safety.get("confirmation", "none") == "none":
             return "read"
         # Legacy catalogs do not distinguish run control from other writes.

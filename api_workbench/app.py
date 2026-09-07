@@ -121,6 +121,8 @@ class WorkbenchApp(App):
                 yield Static("Contract", id="contract", markup=False)
         yield Static("No request sent", id="response-status", markup=False)
         with TabbedContent(id="response-tabs"):
+            with TabPane("Request", id="request-tab"):
+                yield TextArea(read_only=True, id="recorded-request")
             with TabPane("JSON", id="json-tab"):
                 yield TextArea(read_only=True, id="json-response")
             with TabPane("Tree", id="tree-tab"):
@@ -227,6 +229,7 @@ class WorkbenchApp(App):
                 if self.session.client is None or self.session.client.base_url != target.rstrip("/"):
                     self.session.client = HTTPClient(target)
                     self.drift = None
+                    self.query_one("#mode", Static).update(self.mode_label())
                     self.query_one("#drift", TextArea).load_text("Target changed; previous drift comparison is no longer valid.")
                     self.notify("Target changed; authentication headers cleared")
             body = json.loads(self.query_one("#body", TextArea).text)
@@ -288,7 +291,8 @@ class WorkbenchApp(App):
         previous = self.current_exchange
         self.current_exchange = exchange
         self.query_one("#response-status", Static).update(f"{exchange.status or 'ERROR'} | {exchange.elapsed_ms:.1f} ms | {exchange.size} bytes | {exchange.error or exchange.action_id}")
-        for selector, text in {"#json-response": exchange.raw, "#raw-response": "Sanitized JSON; original wire bytes are not retained.\n" + exchange.raw,
+        for selector, text in {"#recorded-request": json.dumps({"method": exchange.method, "url": exchange.url, "headers": exchange.request_headers, "body": exchange.request_body}, indent=2),
+                               "#json-response": exchange.raw, "#raw-response": "Sanitized JSON; original wire bytes are not retained.\n" + exchange.raw,
                                "#response-headers": json.dumps(exchange.response_headers, indent=2), "#response-contract": json.dumps(exchange.contract, indent=2),
                                "#checks": json.dumps(exchange.checks, indent=2), "#diff-response": response_diff(previous, exchange) if previous else "Select another response to compare."}.items():
             self.query_one(selector, TextArea).load_text(text)
@@ -365,7 +369,7 @@ class WorkbenchApp(App):
     @work(thread=True, group="tests", exit_on_error=False)
     def test_worker(self, targets):
         def emit(text):
-            self.call_from_thread(self.query_one("#test-log", RichLog).write, text)
+            self.call_from_thread(lambda: self.query_one("#test-log", RichLog).write(text))
         try:
             results = run_tests(targets, trusted=True, emit=emit, cancel=self.test_cancel)
             emit(json.dumps(results, indent=2))

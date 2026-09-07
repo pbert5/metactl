@@ -78,6 +78,8 @@ def main(argv=None, *, output=None):
         if args.fixture:
             fixtures = read_document(args.fixture)
             client = FixtureClient(fixtures["responses"])
+        if live and live is not registry:
+            registry.diagnostics.extend(live.diagnostics)
         audit = audit_routes((repo or Path.cwd()).resolve(), registry) if args.audit else None
         if args.command == "check":
             out.write(json.dumps({"endpoints": [e.contract() for e in registry.select(application=args.app)],
