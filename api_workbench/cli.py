@@ -110,7 +110,8 @@ def main(argv=None, *, output=None):
             from .app import WorkbenchApp
         except ImportError as exc:
             raise WorkbenchError("TUI dependencies unavailable; install metactl[workbench] in the Server Dev Container") from exc
-        WorkbenchApp(registry, Session(client, Policy(args.allow_mutations, args.allow_hardware)), drift, audit).run()
+        blocked = [d["id"] for d in (drift or []) if d["kind"] in {"changed", "declared_only"}]
+        WorkbenchApp(registry, Session(client, Policy(args.allow_mutations, args.allow_hardware), blocked=blocked), drift, audit).run()
         return 0
     except (ValueError, OSError, KeyError, TypeError) as exc:
         print(f"api-workbench: {exc}", file=sys.stderr)

@@ -71,6 +71,9 @@ class WorkbenchApp(App):
     #operation { height: auto; max-height: 3; }
     #evidence-controls { height: 3; }
     #evidence-controls Button { min-width: 10; }
+    .compact #contract-pane { display: none; }
+    .compact #navigation { width: 30%; }
+    .compact #request { width: 70%; }
     """
     BINDINGS = [Binding("ctrl+q", "quit", "Quit"), Binding("/", "search", "Search"),
                 Binding("ctrl+enter", "send", "Send"), Binding("t", "send", "Check response"),
@@ -161,6 +164,9 @@ class WorkbenchApp(App):
         self.populate_tree("")
         self.set_interval(2, self.poll_watch)
 
+    def on_resize(self, event):
+        self.set_class(event.size.width < 120, "compact")
+
     def populate_tree(self, query):
         tree = self.query_one("#endpoint-tree", Tree)
         tree.clear()
@@ -186,6 +192,7 @@ class WorkbenchApp(App):
         endpoint = self.endpoint
         self.query_one("#operation", Static).update(f"{endpoint.method or 'NO API'} {endpoint.path or endpoint.id} [{endpoint.badge}]")
         self.query_one("#contract", Static).update(json.dumps(endpoint.contract() | {"source": endpoint.source}, indent=2))
+        self.query_one("#response-contract", TextArea).load_text(json.dumps(endpoint.contract() | {"source": endpoint.source}, indent=2))
         pane = self.query_one("#parameters", VerticalScroll)
         await pane.remove_children()
         self.field_names = {}

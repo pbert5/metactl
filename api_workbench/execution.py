@@ -107,6 +107,8 @@ class FixtureClient:
     headers = {}
 
     def __init__(self, records):
+        if not isinstance(records, list) or not all(isinstance(r, dict) and isinstance(r.get("method"), str) and isinstance(r.get("path"), str) and isinstance(r.get("status"), int) for r in records):
+            raise WorkbenchError("fixtures must contain a responses list with method, path and integer status")
         self.records = records
 
     def send(self, method, path, body=None, headers=None):
@@ -274,11 +276,14 @@ class Exchange:
 
 
 class Session:
-    def __init__(self, client=None, policy=Policy(), history_limit=100):
+    def __init__(self, client=None, policy=Policy(), history_limit=100, blocked=()):
         self.client, self.policy = client, policy
         self.history = deque(maxlen=history_limit)
+        self.blocked = frozenset(blocked)
 
     def execute(self, endpoint, values, body=None, headers=None, confirmation="", expected_status=None, latency_ms=None):
+        if endpoint.id in self.blocked:
+            raise WorkbenchError("endpoint has observed contract drift; resolve the drift or inspect the server catalog directly")
         if self.client is None:
             raise WorkbenchError("offline catalog mode: select a server or fixture first")
         self.policy.check(endpoint, fixture=isinstance(self.client, FixtureClient), confirmation=confirmation)

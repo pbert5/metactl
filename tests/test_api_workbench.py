@@ -72,6 +72,16 @@ def test_physical_legacy_and_unknown_writes_require_hardware_gate():
         Policy(True).check(endpoint, fixture=False, confirmation=endpoint.id)
 
 
+def test_explicit_read_cannot_override_physical_confirmation():
+    assert read_endpoint(safety={"effect": "read", "confirmation": "physical"}).effect == "hardware"
+
+
+def test_observed_drift_blocks_execution_before_network():
+    session = Session(FixtureClient([]), blocked=["demo.get"])
+    with pytest.raises(WorkbenchError, match="drift"):
+        session.execute(read_endpoint(), {"id": "a"})
+
+
 def test_fixture_never_falls_back_and_records_expected_error_status():
     client = FixtureClient([{"method": "GET", "path": "/api/items/a?limit=5", "status": 409, "body": {"error": "stale"}}])
     session = Session(client)
