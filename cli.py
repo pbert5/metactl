@@ -17,11 +17,11 @@ REPOSITORY_ROOT = Path(os.environ.get("META_WEBUI_REPOSITORY_ROOT", Path(__file_
 
 try:
     from .framework.action_catalog import ActionCatalogError, load_action_catalog
-    from .meta_webui_ui_runtime_textual.cli import run_cli
+    from .meta_webui_ui_runtime_textual.cli import build_parser, run_cli
     from .metactl_transport import TransportError, configured_transport, operator_action_ids
 except ImportError:  # direct loading from the extracted checkout
     from framework.action_catalog import ActionCatalogError, load_action_catalog
-    from meta_webui_ui_runtime_textual.cli import run_cli
+    from meta_webui_ui_runtime_textual.cli import build_parser, run_cli
     from metactl_transport import TransportError, configured_transport, operator_action_ids
 
 
@@ -316,12 +316,34 @@ def main(argv: list[str] | None = None, *, transport: Any | None = None,
     index_path = Path(__file__).with_name("applications") / "evolver" / "actions.json"
     try:
         arguments = list(sys.argv[1:] if argv is None else argv)
+        # A bare invocation is a discovery landing page, not an incomplete
+        # action request.  Build the normal parser so help stays authoritative
+        # and does not instantiate a transport or contact central.
+        if not arguments:
+            parser = build_parser(_layout(index_path))
+            output = output or sys.stdout
+            output.write("Meta BAL operator CLI\n\n")
+            output.write("Common discovery paths:\n")
+            output.write("  metactl actions list\n")
+            output.write("  metactl interactive\n")
+            output.write("  metactl tui\n")
+            output.write("  metactl api\n")
+            output.write("  metactl api check --repo .\n")
+            output.write("  metactl api tui --repo .\n\n")
+            parser.print_help(output)
+            return 0
         if arguments[:1] == ["api"]:
             try:
                 from .api_workbench.cli import main as api_main
             except ImportError:
                 from api_workbench.cli import main as api_main
             return api_main(arguments[1:], output=output)
+        if arguments[:1] == ["tui"]:
+            try:
+                from .api_workbench.cli import main as api_main
+            except ImportError:
+                from api_workbench.cli import main as api_main
+            return api_main(["tui", *arguments[1:]], output=output)
         # Human-facing grouped aliases remain presentation-only; the action ID
         # is the stable contract and still drives the same explicit binding.
         chosen_transport = transport or configured_transport()

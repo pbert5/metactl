@@ -14,6 +14,11 @@ grouped commands such as `metactl controllers show <id>` are presentation
 aliases for stable catalog action IDs. `metactl interactive` offers the same
 catalog in a prompt-driven shell; it is intended for a terminal and does not
 persist credentials or state.
+
+Running `metactl` without arguments prints this discovery help and exits
+successfully. `metactl tui` is the explicit shortcut for the API Workbench;
+repository browsing is offline, for example `metactl tui --repo .` or
+`metactl api check --repo .`.
 # API Workbench
 
 Use `metactl api tui --repo .` to browse this checkout, or add `--live` to
@@ -27,4 +32,3 @@ read-only polling, sanitized history/export, and local pytest evidence.
 
 SAFE is the default. Writes require explicit session options and confirmation.
 The full usage and safety contract is in the umbrella's `docs/api-workbench.md`.
-

@@ -40,6 +40,24 @@ def _metactl_module():
     return module
 
 
+def test_bare_metactl_is_a_successful_discovery_landing_page(capsys):
+    module = _metactl_module()
+    assert module.main([]) == 0
+    output = capsys.readouterr().out
+    assert "metactl actions list" in output
+    assert "metactl interactive" in output
+    assert "metactl tui" in output
+    assert "metactl api check --repo ." in output
+
+
+def test_top_level_tui_alias_exposes_api_workbench_help(capsys):
+    module = _metactl_module()
+    with pytest.raises(SystemExit) as raised:
+        module.main(["tui", "--help"])
+    assert raised.value.code == 0
+    assert "usage: metactl api" in capsys.readouterr().out
+
+
 def test_deployment_catalog_references_are_explicit_and_valid():
     index = json.loads((ROOT / "applications/deployment/action-catalog.json").read_text())
     assert index["deployment_index"] == [reference["id"] for reference in index["catalogs"]]
