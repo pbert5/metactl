@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -19,7 +21,108 @@ except ImportError:
     from metactl_transport import OperatorTarget, TransportError, resolve_operator_target
 
 
-CATALOG = Path(__file__).resolve().parents[1] / "applications" / "evolver" / "actions.json"
+APPLICATIONS = Path(__file__).resolve().parents[1] / "applications"
+CATALOG = APPLICATIONS / "evolver" / "actions.json"
+PRESENTATION = APPLICATIONS / "deployment" / "metactl-cli.json"
+SENSITIVE_PARTS = ("credential", "password", "secret", "token", "private_key", "api_key", "authorization")
+
+
+@dataclass(frozen=True)
+class NavigationItem:
+    label: str
+    action_ids: tuple[str, ...] = ()
+
+
+def safe_target_url(value: str) -> str:
+    """Remove URL userinfo and redact sensitive query parameters for display."""
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return "<redacted URL>"
+    if not parts.scheme or not parts.netloc:
+        return value
+    try:
+        hostname = parts.hostname or ""
+        port = f":{parts.port}" if parts.port is not None else ""
+    except ValueError:
+        return "<redacted URL>"
+    query = urlencode([
+        (key, "<redacted>" if any(part in key.lower() for part in SENSITIVE_PARTS) else item)
+        for key, item in parse_qsl(parts.query, keep_blank_values=True)
+    ])
+    return urlunsplit((parts.scheme, hostname + port, parts.path, query, ""))
+
+
+def redact(value: Any, *, key: str | None = None) -> Any:
+    """Redact secret-shaped response fields and embedded URLs recursively."""
+    if key is not None and any(part in key.lower() for part in SENSITIVE_PARTS):
+        return "<redacted>"
+    if isinstance(value, Mapping):
+        return {name: redact(item, key=str(name)) for name, item in value.items()}
+    if isinstance(value, list):
+        return [redact(item) for item in value]
+    if isinstance(value, str) and (value.startswith(("http://", "https://"))):
+        return safe_target_url(value)
+    return value
+
+
+def physical_evidence_label(result: Mapping[str, Any]) -> str:
+    value = result.get("physical_actuation_verified")
+    if value is True:
+        return "yes"
+    if value is False:
+        return "no (explicit negative)"
+    return "unknown (not reported)"
+
+
+def catalog_confirmation_label(safety: Mapping[str, Any]) -> str:
+    confirmation = safety.get("confirmation", "none")
+    effect = safety.get("effect", "read")
+    if confirmation == "none" and effect == "read":
+        return "SAFE / read-only"
+    if confirmation == "physical" or effect == "hardware":
+        return "catalog confirmation: physical hardware"
+    if confirmation == "operator" or confirmation == "required":
+        return "catalog confirmation: operator"
+    return f"catalog confirmation: {confirmation}"
+
+
+def _action_ids(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if not isinstance(value, Mapping):
+        return []
+    if isinstance(value.get("action_id"), str):
+        return [value["action_id"]]
+    result: list[str] = []
+    for name, child in value.items():
+        if name in {"positionals", "defaults"}:
+            continue
+        result.extend(_action_ids(child))
+    return result
+
+
+def load_navigation(presentation: Path, actions: Mapping[str, Mapping[str, Any]]) -> tuple[NavigationItem, ...]:
+    document = json.loads(presentation.read_text(encoding="utf-8"))
+    groups = document.get("groups", {})
+    def group_ids(name: str) -> list[str]:
+        return [identifier for identifier in _action_ids(groups.get(name, {})) if identifier in actions]
+    controller_ids = group_ids("controllers")
+    recovery_ids = [identifier for identifier in controller_ids if ".recovery." in identifier]
+    controller_ids = [identifier for identifier in controller_ids if identifier not in recovery_ids]
+    ids_by_prefix = lambda prefix: [identifier for identifier in actions if identifier.startswith(prefix)]
+    releases = group_ids("releases") or [identifier for identifier in actions if ".release" in identifier]
+    experiments = group_ids("experiments") or ids_by_prefix("evolver.experiments.")
+    return (
+        NavigationItem("Overview", ("evolver.edge.status",)),
+        NavigationItem("Controllers", tuple(controller_ids)),
+        NavigationItem("Instruments", tuple(group_ids("instruments") or ids_by_prefix("evolver.instruments."))),
+        NavigationItem("Runs", tuple(group_ids("runs") or ids_by_prefix("evolver.runs."))),
+        NavigationItem("Experiments", tuple(experiments)),
+        NavigationItem("Releases", tuple(releases)),
+        NavigationItem("Recovery", tuple(recovery_ids)),
+        NavigationItem("Developer/API Workbench"),
+    )
 
 
 class ConfirmationScreen(ModalScreen[str | None]):
@@ -63,6 +166,7 @@ class OperatorTUI(App[None]):
         self.target = target or resolve_operator_target()
         self.catalog = load_action_catalog(CATALOG)
         self.actions = {action["id"]: action for action in self.catalog.actions}
+        self.navigation_model = load_navigation(PRESENTATION, self.actions)
         self.selected_action: Mapping[str, Any] | None = None
         self.connection = "checking"
 
@@ -79,7 +183,7 @@ class OperatorTUI(App[None]):
 
     def connection_text(self) -> str:
         auth = ", ".join(name for name, present in self.target.auth.items() if present) or "none"
-        return f"target: {self.target.url} ({self.target.source}) | connection: {self.connection} | auth configured: {auth}"
+        return f"target: {safe_target_url(self.target.url)} ({self.target.source}) | connection: {self.connection} | auth configured: {auth} | mode: SAFE"
 
     def on_mount(self) -> None:
         self.populate_tree()
@@ -96,24 +200,31 @@ class OperatorTUI(App[None]):
 
     def populate_tree(self) -> None:
         tree = self.query_one("#navigation", Tree)
-        groups: dict[str, Any] = {}
-        for action in self.actions.values():
-            noun = action["id"].split(".")[1] if "." in action["id"] else action["id"]
-            group = groups.setdefault(noun, tree.root.add(noun, expand=True))
-            planned = action["status"] != "implemented"
-            badge = "planned / unavailable" if planned else action["status"]
-            group.add_leaf(f"{action['title']} [{badge}]", data=action["id"])
+        for item in self.navigation_model:
+            group = tree.root.add(item.label, expand=True, data=item.label)
+            if not item.action_ids:
+                group.add_leaf("Open API Workbench", data="api-workbench")
+            for action_id in item.action_ids:
+                action = self.actions[action_id]
+                planned = action["status"] != "implemented"
+                badge = "planned / unavailable" if planned else action["status"]
+                group.add_leaf(f"{action['title']} [{badge}]", data=action_id)
         tree.root.expand()
 
     async def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         action_id = event.node.data
         if not isinstance(action_id, str):
             return
+        if action_id == "api-workbench":
+            self.selected_action = None
+            self.query_one("#detail", Static).update("Developer/API Workbench\nUse: metactl api tui\nAPI Workbench is a separate application.")
+            return
         self.selected_action = self.actions[action_id]
         action = self.selected_action
         planned = action["status"] != "implemented"
         self.query_one("#detail", Static).update(
-            f"{action['title']}\nAction ID: {action_id}\nStatus: {action['status']}"
+            f"{action['title']}\nAction ID: {action_id}\nStatus: {action['status']}\n"
+            f"{catalog_confirmation_label(action.get('safety', {}))}"
             + ("\nplanned / unavailable" if planned else ""))
         parameters = self.query_one("#parameters")
         await parameters.remove_children()
@@ -133,7 +244,7 @@ class OperatorTUI(App[None]):
             if self.query_one(f"#parameter-{name}", Input).value != ""
         }
         safety = self.selected_action.get("safety", {})
-        if safety.get("confirmation") not in (None, "none") or safety.get("effect") not in (None, "read"):
+        if safety.get("confirmation") not in (None, "none"):
             self.push_screen(ConfirmationScreen(action_id), lambda answer: self.dispatch(action_id, parameters, bool(answer)))
         else:
             self.dispatch(action_id, parameters, False)
@@ -148,9 +259,10 @@ class OperatorTUI(App[None]):
         self.show_result(result)
 
     def show_result(self, result: Any) -> None:
+        result = redact(result)
         if isinstance(result, Mapping) and result.get("disposition") in {"accepted", "queued"}:
             disposition = "accepted/queued"
-            physical = "yes" if result.get("physical_actuation_verified") is True else "no"
+            physical = physical_evidence_label(result)
             text = f"{disposition}\nphysical evidence: {physical}\n{json.dumps(result, indent=2, sort_keys=True)}"
         else:
             text = json.dumps(result, indent=2, sort_keys=True, default=str)
