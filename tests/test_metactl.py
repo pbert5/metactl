@@ -50,10 +50,18 @@ def test_bare_metactl_is_a_successful_discovery_landing_page(capsys):
     assert "metactl api check --repo ." in output
 
 
-def test_top_level_tui_alias_exposes_api_workbench_help(capsys):
+def test_top_level_tui_alias_exposes_operator_help(capsys):
     module = _metactl_module()
     with pytest.raises(SystemExit) as raised:
         module.main(["tui", "--help"])
+    assert raised.value.code == 0
+    assert "usage: metactl tui" in capsys.readouterr().out
+
+
+def test_api_tui_alias_keeps_api_workbench_help(capsys):
+    module = _metactl_module()
+    with pytest.raises(SystemExit) as raised:
+        module.main(["api", "tui", "--help"])
     assert raised.value.code == 0
     assert "usage: metactl api" in capsys.readouterr().out
 

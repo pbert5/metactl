@@ -362,10 +362,10 @@ def main(argv: list[str] | None = None, *, transport: Any | None = None,
             return api_main(arguments[1:], output=output)
         if arguments[:1] == ["tui"]:
             try:
-                from .api_workbench.cli import main as api_main
+                from .operator_tui.cli import main as operator_main
             except ImportError:
-                from api_workbench.cli import main as api_main
-            return api_main(["tui", *arguments[1:]], output=output)
+                from operator_tui.cli import main as operator_main
+            return operator_main(arguments[1:], transport=transport, output=output)
         # Human-facing grouped aliases remain presentation-only; the action ID
         # is the stable contract and still drives the same explicit binding.
         chosen_transport = transport or configured_transport()
