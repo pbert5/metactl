@@ -123,6 +123,29 @@ def test_nested_human_path_and_raw_action_id_dispatch_same_action(capsys):
     assert fake.calls[-1] == human_call
 
 
+def test_commands_group_uses_each_action_contract_for_positionals(capsys):
+    module = _metactl_module()
+
+    class Fake:
+        def __init__(self):
+            self.calls = []
+
+        def action(self, action_id, parameters):
+            self.calls.append((action_id, parameters))
+            return {"ok": True}
+
+    fake = Fake()
+    assert module.main(["controllers", "commands", "list", "edge-a", "--json"], transport=fake) == 0
+    capsys.readouterr()
+    assert fake.calls[-1] == ("evolver.controllers.commands.list", {"controller_id": "edge-a"})
+
+    assert module.main(["controllers", "commands", "show", "edge-a", "command-1", "--json"], transport=fake) == 0
+    capsys.readouterr()
+    assert fake.calls[-1] == ("evolver.controllers.commands.show", {
+        "controller_id": "edge-a", "command_id": "command-1",
+    })
+
+
 def test_compatibility_alias_is_preserved_by_presentation_model(capsys):
     module = _metactl_module()
 

@@ -223,13 +223,20 @@ def _human_arguments(arguments: list[str], presentation: Mapping[str, Any] | Non
         leading.append(arguments.pop(0))
     aliases = dict(_HUMAN_ALIASES)
     defaults: dict[tuple[str, ...], Mapping[str, Any]] = {}
+    positionals: dict[tuple[str, ...], tuple[str, ...]] = {}
     def collect(tree: Mapping[str, Any], prefix: tuple[str, ...] = ()) -> None:
         for name, value in tree.items():
+            if name in {"description", "positionals", "aliases", "defaults", "action_id"}:
+                continue
+            metadata = value if isinstance(value, Mapping) else {}
+            positional_names = metadata.get("positionals") if isinstance(metadata.get("positionals"), list) else None
             leaf = value if isinstance(value, str) else value.get("action_id") if isinstance(value, Mapping) else None
             if isinstance(leaf, str):
                 aliases.setdefault(prefix + (name,), leaf)
                 if isinstance(value, Mapping):
                     defaults[prefix + (name,)] = value.get("defaults", {})
+                    if positional_names is not None:
+                        positionals[prefix + (name,)] = tuple(str(item) for item in positional_names)
             elif isinstance(value, Mapping):
                 children = value.get("commands", value)
                 if isinstance(children, Mapping):
@@ -260,18 +267,20 @@ def _human_arguments(arguments: list[str], presentation: Mapping[str, Any] | Non
                     break
                 positional.append(value)
         if positional:
-            if action_id == "evolver.controllers.add":
-                option_names = ["--server-url"]
-            elif action_id == "evolver.controllers.commands.show":
-                option_names = ["--controller-id", "--command-id"]
-            elif action_id == "evolver.controllers.release.set":
-                option_names = ["--controller-id", "--release"]
-            elif action_id == "evolver.instruments.show":
-                option_names = ["--instrument-id"]
-            elif action_id.startswith("evolver.runs."):
-                option_names = ["--run-id"]
-            else:
-                option_names = ["--controller-id"]
+            option_names = [f"--{name.replace('_', '-')}" for name in positionals.get(prefix, ())]
+            if not option_names:
+                if action_id == "evolver.controllers.add":
+                    option_names = ["--server-url"]
+                elif action_id == "evolver.controllers.commands.show":
+                    option_names = ["--controller-id", "--command-id"]
+                elif action_id == "evolver.controllers.release.set":
+                    option_names = ["--controller-id", "--release"]
+                elif action_id == "evolver.instruments.show":
+                    option_names = ["--instrument-id"]
+                elif action_id.startswith("evolver.runs."):
+                    option_names = ["--run-id"]
+                else:
+                    option_names = ["--controller-id"]
             if len(positional) > len(option_names):
                 raise ValueError(f"too many positional arguments for {' '.join(prefix)}")
             tail = [part for value, option in zip(positional, option_names) for part in (option, value)] + tail[len(positional):]

@@ -3,10 +3,9 @@
   "groups": {
     "controllers": {
       "commands": {
-        "list": "evolver.controllers.commands.list",
-        "show": "evolver.controllers.commands.show",
-        "watch": "evolver.controllers.commands.show",
-        "positionals": ["controller_id", "command_id"]
+        "list": {"action_id": "evolver.controllers.commands.list", "positionals": ["controller_id"]},
+        "show": {"action_id": "evolver.controllers.commands.show", "positionals": ["controller_id", "command_id"]},
+        "watch": {"action_id": "evolver.controllers.commands.show", "positionals": ["controller_id", "command_id"]}
       },
       "manual": {
         "lease": {
