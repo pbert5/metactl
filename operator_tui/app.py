@@ -6,7 +6,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -16,15 +15,17 @@ from textual.widgets import Button, Footer, Header, Input, Label, Static, Tree
 try:
     from ..framework.action_catalog import load_action_catalog
     from ..metactl_transport import OperatorTarget, TransportError, resolve_operator_target
+    from ..presentation import SENSITIVE_URL_PARTS, load_presentation, presentation_paths, safe_target_url
 except ImportError:
     from framework.action_catalog import load_action_catalog
     from metactl_transport import OperatorTarget, TransportError, resolve_operator_target
+    from presentation import SENSITIVE_URL_PARTS, load_presentation, presentation_paths, safe_target_url
 
 
 APPLICATIONS = Path(__file__).resolve().parents[1] / "applications"
 CATALOG = APPLICATIONS / "evolver" / "actions.json"
 PRESENTATION = APPLICATIONS / "deployment" / "metactl-cli.json"
-SENSITIVE_PARTS = ("credential", "password", "secret", "token", "private_key", "api_key", "authorization")
+SENSITIVE_PARTS = SENSITIVE_URL_PARTS
 
 
 @dataclass(frozen=True)
@@ -35,26 +36,6 @@ class NavigationItem:
 
 
 WORKBENCH_NODE = object()
-
-
-def safe_target_url(value: str) -> str:
-    """Remove URL userinfo and redact sensitive query parameters for display."""
-    try:
-        parts = urlsplit(value)
-    except ValueError:
-        return "<redacted URL>"
-    if not parts.netloc or (not parts.scheme and not value.startswith("//")):
-        return value
-    try:
-        hostname = parts.hostname or ""
-        port = f":{parts.port}" if parts.port is not None else ""
-    except ValueError:
-        return "<redacted URL>"
-    query = urlencode([
-        (key, "<redacted>" if any(part in key.lower() for part in SENSITIVE_PARTS) else item)
-        for key, item in parse_qsl(parts.query, keep_blank_values=True)
-    ])
-    return urlunsplit((parts.scheme, hostname + port, parts.path, query, ""))
 
 
 def redact(value: Any, *, key: str | None = None) -> Any:
@@ -86,8 +67,8 @@ def catalog_confirmation_label(safety: Mapping[str, Any], *, tags: tuple[str, ..
     effect = safety.get("effect")
     if confirmation == "none" and effect == "read":
         return "SAFE / read-only"
-    if effect is None and "mutating" in tags:
-        return "catalog confirmation: operator (mutating effect)"
+    if confirmation == "none":
+        return "SAFE / read-only" if effect == "read" else "catalog confirmation: none"
     if effect is None:
         return "catalog confirmation: unspecified effect"
     if confirmation == "physical" or effect == "hardware":
@@ -196,6 +177,7 @@ class OperatorTUI(App[None]):
         self.catalog = load_action_catalog(CATALOG)
         self.actions = {action["id"]: action for action in self.catalog.actions}
         self.navigation_model = load_navigation(PRESENTATION, self.actions)
+        self.cli_paths = presentation_paths(load_presentation(PRESENTATION))
         self.selected_action: Mapping[str, Any] | None = None
         self.connection = "checking"
 
@@ -251,7 +233,8 @@ class OperatorTUI(App[None]):
         action = self.selected_action
         planned = action["status"] != "implemented"
         self.query_one("#detail", Static).update(
-            f"{action['title']}\nAction ID: {action_id}\nStatus: {action['status']}\n"
+            f"{action['title']}\nCLI: {self.cli_paths.get(action_id, 'metactl ' + action_id)}\n"
+            f"Action ID: {action_id}\nStatus: {action['status']}\n"
             f"{catalog_confirmation_label(action.get('safety', {}), tags=tuple(action.get('tags', ())))}"
             + ("\nplanned / unavailable" if planned else ""))
         parameters = self.query_one("#parameters")

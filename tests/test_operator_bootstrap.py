@@ -73,6 +73,27 @@ def test_doctor_redacts_schemeless_url_userinfo_and_query_secrets():
         "//central.test/api?shared_secret=%3Credacted%3E&keep=yes"
 
 
+@pytest.mark.parametrize("url", [
+    "HTTPS://operator:password@central.test/api?TOKEN=secret&keep=yes",
+    "http:///api?token=secret",
+    "http://[bad/api?token=secret",
+])
+def test_doctor_redacts_uppercase_empty_authority_and_malformed_urls(url):
+    class FakeTransport:
+        def discover_actions(self):
+            return {"version": "2", "actions": []}
+
+    report = doctor_report(
+        transport=FakeTransport(),
+        target=resolve_operator_target({"META_WEBUI_METACTL_CENTRAL_URL": url}),
+        local_catalog={"version": "2", "api": {}},
+    )
+    rendered = json.dumps(report)
+    assert "password" not in rendered
+    assert "secret" not in rendered
+    assert report["target"]["url"] in {"https://central.test/api?TOKEN=%3Credacted%3E&keep=yes", "<redacted URL>"}
+
+
 def test_doctor_is_json_clean_and_gives_remediation_for_unreachable_target():
     class FakeTransport:
         def discover_actions(self):

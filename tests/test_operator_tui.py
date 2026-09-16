@@ -196,6 +196,18 @@ def test_redaction_covers_enrollment_secret_fields_and_schemeless_urls():
                      "url": "//example.test/?api_key=%3Credacted%3E"}
 
 
+@pytest.mark.parametrize("url", [
+    "HTTPS://operator:password@example.test/?TOKEN=secret",
+    "http:///path?token=secret",
+    "http://[bad/path?token=secret",
+])
+def test_safe_target_url_redacts_uppercase_empty_authority_and_malformed_urls(url):
+    rendered = safe_target_url(url)
+    assert "password" not in rendered
+    assert "secret" not in rendered
+    assert rendered in {"https://example.test/?TOKEN=%3Credacted%3E", "<redacted URL>"}
+
+
 def test_physical_evidence_is_tri_state_and_catalog_confirmation_is_explicit():
     assert physical_evidence_label({}) == "unknown (not reported)"
     assert physical_evidence_label({"physical_actuation_verified": False}) == "no (explicit negative)"
@@ -206,3 +218,9 @@ def test_physical_evidence_is_tri_state_and_catalog_confirmation_is_explicit():
     assert catalog_confirmation_label({"confirmation": "physical", "effect": "hardware"}) == \
         "catalog confirmation: physical hardware"
     assert catalog_confirmation_label({"confirmation": "none"}, tags=("mutating",)) != "SAFE / read-only"
+    assert catalog_confirmation_label({"confirmation": "none"}, tags=("mutating",)) == "catalog confirmation: none"
+
+
+def test_tui_detail_uses_the_shared_human_cli_presentation_path():
+    app = OperatorTUI(transport=FakeTransport({"evolver.controllers.show": {}}, []), target=target())
+    assert app.cli_paths["evolver.controllers.show"] == "metactl controllers show"

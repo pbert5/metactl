@@ -13,7 +13,6 @@ from pathlib import Path
 import sys
 import time
 from typing import Any, Mapping
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 REPOSITORY_ROOT = Path(os.environ.get("META_WEBUI_REPOSITORY_ROOT", Path(__file__).resolve().parents[1]))
 
@@ -21,10 +20,12 @@ try:
     from .framework.action_catalog import ActionCatalogError, load_action_catalog
     from .meta_webui_ui_runtime_textual.cli import build_parser, run_cli
     from .metactl_transport import TransportError, configured_transport, operator_action_ids
+    from .presentation import safe_target_url
 except ImportError:  # direct loading from the extracted checkout
     from framework.action_catalog import ActionCatalogError, load_action_catalog
     from meta_webui_ui_runtime_textual.cli import build_parser, run_cli
     from metactl_transport import TransportError, configured_transport, operator_action_ids
+    from presentation import safe_target_url
 
 
 def _catalog_paths(index_path: Path) -> list[Path]:
@@ -98,24 +99,8 @@ def _redact(value: Any) -> Any:
     if isinstance(value, list):
         return [_redact(item) for item in value]
     if isinstance(value, str) and value.startswith(("http://", "https://", "//")):
-        return _safe_target_url(value, sensitive)
+        return safe_target_url(value)
     return value
-
-
-def _safe_target_url(value: str, sensitive: tuple[str, ...]) -> str:
-    try:
-        parts = urlsplit(value)
-        if not parts.netloc or (not parts.scheme and not value.startswith("//")):
-            return value
-        hostname = parts.hostname or ""
-        port = f":{parts.port}" if parts.port is not None else ""
-        query = urlencode([
-            (key, "<redacted>" if any(part in key.lower() for part in sensitive) else item)
-            for key, item in parse_qsl(parts.query, keep_blank_values=True)
-        ])
-        return urlunsplit((parts.scheme, hostname + port, parts.path, query, ""))
-    except ValueError:
-        return "<redacted URL>"
 
 
 def _present_command_result(value: Any) -> Any:
@@ -380,11 +365,16 @@ def main(argv: list[str] | None = None, *, transport: Any | None = None,
             output.write("  metactl actions list\n")
             output.write("  metactl interactive\n")
             output.write("  metactl tui\n")
+            output.write("  metactl doctor\n")
+            output.write("  metactl tui\n")
             output.write("  metactl api\n")
             output.write("  metactl api check --repo .\n")
             output.write("  metactl api tui --repo .\n\n")
             parser.print_help(output)
             return 0
+        if arguments == ["--help"]:
+            output = output or sys.stdout
+            output.write("Common discovery paths: metactl doctor | metactl tui | metactl api\n\n")
         if arguments[:1] == ["api"]:
             try:
                 from .api_workbench.cli import main as api_main

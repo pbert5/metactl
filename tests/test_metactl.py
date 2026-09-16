@@ -48,6 +48,16 @@ def test_bare_metactl_is_a_successful_discovery_landing_page(capsys):
     assert "metactl interactive" in output
     assert "metactl tui" in output
     assert "metactl api check --repo ." in output
+    assert "metactl doctor" in output
+
+
+def test_top_level_help_names_all_routed_entrypoints(capsys):
+    module = _metactl_module()
+    assert module.main(["--help"]) == 0
+    output = capsys.readouterr().out
+    assert "metactl doctor" in output
+    assert "metactl tui" in output
+    assert "metactl api" in output
 
 
 def test_top_level_tui_alias_exposes_operator_help(capsys):
