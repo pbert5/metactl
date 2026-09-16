@@ -40,6 +40,137 @@ def _metactl_module():
     return module
 
 
+def test_bare_metactl_is_a_successful_discovery_landing_page(capsys):
+    module = _metactl_module()
+    assert module.main([]) == 0
+    output = capsys.readouterr().out
+    assert "metactl actions list" in output
+    assert "metactl interactive" in output
+    assert "metactl tui" in output
+    assert "metactl api check --repo ." in output
+    assert "metactl doctor" in output
+
+
+def test_top_level_help_names_all_routed_entrypoints(capsys):
+    module = _metactl_module()
+    with pytest.raises(SystemExit) as raised:
+        module.main(["--help"])
+    assert raised.value.code == 0
+    output = capsys.readouterr().out
+    assert "metactl doctor" in output
+    assert "metactl tui" in output
+    assert "metactl api" in output
+
+
+def test_top_level_tui_alias_exposes_operator_help(capsys):
+    module = _metactl_module()
+    with pytest.raises(SystemExit) as raised:
+        module.main(["tui", "--help"])
+    assert raised.value.code == 0
+    assert "usage: metactl tui" in capsys.readouterr().out
+
+
+def test_api_tui_alias_keeps_api_workbench_help(capsys):
+    module = _metactl_module()
+    with pytest.raises(SystemExit) as raised:
+        module.main(["api", "tui", "--help"])
+    assert raised.value.code == 0
+    assert "usage: metactl api" in capsys.readouterr().out
+
+
+def test_public_doctor_json_dispatches_read_only_report(capsys):
+    module = _metactl_module()
+
+    class Fake:
+        def discover_actions(self):
+            return {"version": "2", "actions": [{"id": "evolver.edge.status"}]}
+
+    assert module.main(["doctor", "--format", "json"], transport=Fake()) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["reachable"] is True
+    assert report["discovery"] == {"status": "ok", "version": "2", "actions": 1}
+
+
+def test_controllers_help_is_a_real_nested_parser_path(capsys):
+    module = _metactl_module()
+    with pytest.raises(SystemExit) as raised:
+        module.main(["controllers", "--help"], transport=object())
+    assert raised.value.code == 0
+    text = capsys.readouterr().out
+    assert "show" in text
+    assert "freshness" in text
+    assert "recovery" in text
+
+
+def test_nested_human_path_and_raw_action_id_dispatch_same_action(capsys):
+    module = _metactl_module()
+
+    class Fake:
+        def __init__(self):
+            self.calls = []
+
+        def action(self, action_id, parameters):
+            self.calls.append((action_id, parameters))
+            return {"ok": True}
+
+    fake = Fake()
+    assert module.main(["controllers", "show", "edge-a", "--json"], transport=fake) == 0
+    capsys.readouterr()
+    human_call = fake.calls[-1]
+    assert module.main(["evolver.controllers.show", "--controller-id", "edge-a", "--json"], transport=fake) == 0
+    capsys.readouterr()
+    assert fake.calls[-1] == human_call
+
+
+def test_compatibility_alias_is_preserved_by_presentation_model(capsys):
+    module = _metactl_module()
+
+    class Fake:
+        def __init__(self):
+            self.calls = []
+
+        def action(self, action_id, parameters):
+            self.calls.append((action_id, parameters))
+            return {"ok": True}
+
+    fake = Fake()
+    assert module.main(["controllers", "adopt", "https://edge", "--yes", "--json"], transport=fake) == 0
+    capsys.readouterr()
+    assert fake.calls[-1][0] == "evolver.controllers.add"
+
+
+def test_planned_human_path_is_visible_but_never_dispatched(capsys):
+    module = _metactl_module()
+
+    class Fake:
+        def __init__(self):
+            self.calls = []
+
+        def action(self, action_id, parameters):
+            self.calls.append((action_id, parameters))
+            return {"unexpected": True}
+
+    fake = Fake()
+    assert module.main(["experiments", "enqueue", "--definition", "{}", "--json"], transport=fake) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["reason"] == "unavailable"
+    assert result["action"] == "evolver.experiments.enqueue"
+    assert fake.calls == []
+
+
+def test_json_output_contains_only_one_machine_readable_document(capsys):
+    module = _metactl_module()
+
+    class Fake:
+        def action(self, action_id, parameters):
+            return {"action_id": action_id, "parameters": parameters}
+
+    assert module.main(["controllers", "list", "--json"], transport=Fake()) == 0
+    output = capsys.readouterr()
+    assert output.err == ""
+    assert json.loads(output.out)["action"] == "evolver.controllers.list"
+
+
 def test_deployment_catalog_references_are_explicit_and_valid():
     index = json.loads((ROOT / "applications/deployment/action-catalog.json").read_text())
     assert index["deployment_index"] == [reference["id"] for reference in index["catalogs"]]
@@ -138,6 +269,46 @@ def test_human_aliases_preserve_action_ids_and_redact_projection(capsys):
     assert result["result"]["controller"]["credential"] == "<redacted>"
 
 
+def test_runs_group_supports_bounded_filters_and_json(capsys):
+    module = _metactl_module()
+    class Fake:
+        def __init__(self): self.calls = []
+        def action(self, action_id, parameters):
+            self.calls.append((action_id, parameters))
+            return {"runs": []}
+    fake = Fake()
+    assert module.main(["runs", "list", "--controller-id", "edge/a", "--state", "paused", "--limit", "7", "--json"], transport=fake) == 0
+    json.loads(capsys.readouterr().out)
+    assert fake.calls == [("evolver.runs.list", {"controller_id": "edge/a", "state": "paused", "limit": 7})]
+
+
+@pytest.mark.parametrize(("command", "action_id"), [
+    (("control", "status"), "evolver.edge.status"),
+    (("control", "controllers"), "evolver.controllers.list"),
+    (("control", "instruments"), "evolver.instruments.list"),
+    (("control", "runs"), "evolver.runs.list"),
+    (("validation", "experiment"), "evolver.experiments.validate"),
+])
+def test_operator_group_aliases_map_to_existing_catalog_actions(capsys, command, action_id):
+    module = _metactl_module()
+
+    class Fake:
+        def __init__(self): self.calls = []
+        def action(self, action, parameters):
+            self.calls.append((action, parameters))
+            return {"action": action}
+
+    fake = Fake()
+    arguments = ["--json", *command]
+    if action_id == "evolver.experiments.validate":
+        arguments += ["--definition", "{}", "--resolved-at", "2026-01-01T00:00:00Z"]
+    assert module.main(arguments, transport=fake) == 0
+    json.loads(capsys.readouterr().out)
+    expected = {"definition": {}, "selected_calibration_artifacts": [],
+                "resolved_at": "2026-01-01T00:00:00Z"} if action_id.endswith("validate") else {}
+    assert fake.calls == [(action_id, expected)]
+
+
 def test_adopt_is_explicitly_forced_and_confirmation_preserving(capsys):
     module = _metactl_module()
 
@@ -153,7 +324,7 @@ def test_adopt_is_explicitly_forced_and_confirmation_preserving(capsys):
     assert fake.calls == [("evolver.controllers.add", {"server_url": "https://edge", "purpose": "forced_adoption", "ttl_seconds": 900})]
 
 
-def test_explicit_enrollment_action_emits_one_time_token_but_projections_redact(capsys):
+def test_explicit_enrollment_action_redacts_all_enrollment_secrets(capsys):
     module = _metactl_module()
 
     class Fake:
@@ -162,8 +333,22 @@ def test_explicit_enrollment_action_emits_one_time_token_but_projections_redact(
 
     assert module.main(["--json", "controllers", "add", "https://edge", "--yes"], transport=Fake()) == 0
     result = json.loads(capsys.readouterr().out)
-    assert result["result"]["enrollment_token"] == "one-time"
+    assert result["result"]["enrollment_token"] == "<redacted>"
     assert result["result"]["credential"] == "<redacted>"
+
+
+def test_direct_command_result_unwraps_nested_disposition_and_physical_evidence(capsys):
+    module = _metactl_module()
+
+    class Fake:
+        def action(self, action_id, parameters):
+            return {"command": {"disposition": "accepted"}}
+
+    assert module.main(["--json", "controllers", "refresh", "central-a"], transport=Fake()) == 0
+    result = json.loads(capsys.readouterr().out)["result"]
+    assert result["disposition"] == "accepted"
+    assert result["accepted_or_queued"] is True
+    assert result["physical_actuation_verified"] is None
 
 
 def test_commands_watch_polls_show_projection_and_distinguishes_actuation(capsys):
@@ -183,8 +368,40 @@ def test_commands_watch_polls_show_projection_and_distinguishes_actuation(capsys
     result = json.loads(capsys.readouterr().out)
     assert result["status"] == "completed"
     assert result["result"]["disposition"] == "completed"
-    assert result["result"]["physical_actuation_verified"] is False
+    assert result["result"]["physical_actuation_verified"] is None
+    assert result["result"]["accepted"] is False
+    assert result["result"]["queued"] is False
     assert len(fake.calls) == 2
+
+
+@pytest.mark.parametrize(
+    ("disposition", "physical", "accepted", "queued"),
+    [
+        ("accepted", None, True, False),
+        ("queued", False, False, True),
+        ("completed", True, False, False),
+    ],
+)
+def test_commands_watch_report_preserves_disposition_and_tri_state_evidence(
+    capsys, disposition, physical, accepted, queued
+):
+    module = _metactl_module()
+
+    class Fake:
+        def action(self, action_id, parameters):
+            return {"command": {"disposition": disposition, **(
+                {} if physical is None else {"physical_actuation_verified": physical}
+            )}}
+
+    assert module.main([
+        "--json", "controllers", "commands", "watch", "central-a", "cmd-1",
+        "--timeout", "0",
+    ], transport=Fake()) == 0
+    result = json.loads(capsys.readouterr().out)["result"]
+    assert result["disposition"] == disposition
+    assert result["physical_actuation_verified"] is physical
+    assert result["accepted"] is accepted
+    assert result["queued"] is queued
 
 
 def test_central_http_transport_binds_route_headers_and_body():
