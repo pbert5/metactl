@@ -338,6 +338,25 @@ def test_explicit_enrollment_action_redacts_all_enrollment_secrets(capsys):
     assert result["result"]["credential"] == "<redacted>"
 
 
+def test_enrollment_accepts_endpoint_id_and_structured_release_binding(capsys):
+    module = _metactl_module()
+
+    class Fake:
+        def __init__(self): self.calls = []
+        def action(self, action_id, parameters):
+            self.calls.append((action_id, parameters))
+            return {"ok": True}
+
+    fake = Fake()
+    binding = {"release": "r1", "source_revision": "abcdef1", "manifest_sha256": "a" * 64}
+    assert module.main(["--json", "evolver.controllers.add", "--endpoint-id", "central",
+                        "--release-binding", json.dumps(binding), "--yes"], transport=fake) == 0
+    json.loads(capsys.readouterr().out)
+    assert fake.calls == [("evolver.controllers.add", {
+        "endpoint_id": "central", "release_binding": binding, "ttl_seconds": 900, "purpose": "enrollment",
+    })]
+
+
 def test_direct_command_result_unwraps_nested_disposition_and_physical_evidence(capsys):
     module = _metactl_module()
 
