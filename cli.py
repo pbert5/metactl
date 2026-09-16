@@ -364,17 +364,16 @@ def main(argv: list[str] | None = None, *, transport: Any | None = None,
             output.write("Common discovery paths:\n")
             output.write("  metactl actions list\n")
             output.write("  metactl interactive\n")
-            output.write("  metactl tui\n")
+            output.write("  metactl tui                 # operator TUI\n")
             output.write("  metactl doctor\n")
-            output.write("  metactl tui\n")
             output.write("  metactl api\n")
-            output.write("  metactl api check --repo .\n")
-            output.write("  metactl api tui --repo .\n\n")
+            output.write("  metactl api tui --repo .    # API Workbench\n")
+            output.write("  metactl api check --repo .\n\n")
             parser.print_help(output)
             return 0
         if arguments == ["--help"]:
             output = output or sys.stdout
-            output.write("Common discovery paths: metactl doctor | metactl tui | metactl api\n\n")
+            output.write("Common discovery paths: metactl doctor | metactl tui (operator TUI) | metactl api tui (API Workbench)\n\n")
         if arguments[:1] == ["api"]:
             try:
                 from .api_workbench.cli import main as api_main
