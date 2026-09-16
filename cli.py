@@ -6,6 +6,7 @@ available from this server/operator CLI.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -366,6 +367,19 @@ def main(argv: list[str] | None = None, *, transport: Any | None = None,
             except ImportError:
                 from operator_tui.cli import main as operator_main
             return operator_main(arguments[1:], transport=transport, output=output)
+        if arguments[:1] == ["doctor"]:
+            parser = argparse.ArgumentParser(prog="metactl doctor",
+                                             description="run read-only operator diagnostics")
+            parser.add_argument("--format", choices=("json",), default="json")
+            parser.parse_args(arguments[1:])
+            try:
+                from .doctor import doctor_report
+            except ImportError:
+                from doctor import doctor_report
+            output = output or sys.stdout
+            json.dump(doctor_report(transport=transport), output, sort_keys=True, default=str)
+            output.write("\n")
+            return 0
         # Human-facing grouped aliases remain presentation-only; the action ID
         # is the stable contract and still drives the same explicit binding.
         chosen_transport = transport or configured_transport()

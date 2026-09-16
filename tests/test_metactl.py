@@ -66,6 +66,19 @@ def test_api_tui_alias_keeps_api_workbench_help(capsys):
     assert "usage: metactl api" in capsys.readouterr().out
 
 
+def test_public_doctor_json_dispatches_read_only_report(capsys):
+    module = _metactl_module()
+
+    class Fake:
+        def discover_actions(self):
+            return {"version": "2", "actions": [{"id": "evolver.edge.status"}]}
+
+    assert module.main(["doctor", "--format", "json"], transport=Fake()) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["reachable"] is True
+    assert report["discovery"] == {"status": "ok", "version": "2", "actions": 1}
+
+
 def test_controllers_help_is_a_real_nested_parser_path(capsys):
     module = _metactl_module()
     with pytest.raises(SystemExit) as raised:
