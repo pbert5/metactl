@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -96,6 +97,75 @@ def _present_command_result(result: Any) -> Any:
     }
 
 
+def catalog_drift(local: Mapping[str, Any], discovered: Mapping[str, Any] | None) -> str:
+    """Compare live discovery with the local action contract."""
+    if not isinstance(discovered, Mapping) or not isinstance(discovered.get("actions"), list):
+        return "unavailable"
+    if discovered.get("version") is None:
+        return "clean"  # compatibility with older discovery gateways
+    local_ids = set(local.get("api", {}))
+    live_ids = {item.get("id") for item in discovered["actions"] if isinstance(item, Mapping)}
+    return "clean" if local.get("version") == discovered.get("version") and local_ids == live_ids else "changed"
+
+
+def discovery_gate(local: Mapping[str, Any], discovered: Mapping[str, Any] | None) -> tuple[bool, str]:
+    """Return whether the TUI may invoke a catalog action."""
+    status = catalog_drift(local, discovered)
+    return status == "clean", status
+
+
+def validate_action_parameters(action: Mapping[str, Any], values: Mapping[str, Any]) -> dict[str, Any]:
+    """Coerce form values according to the action catalog parameter schema."""
+    result: dict[str, Any] = {}
+    for name, spec in action.get("parameters", {}).items():
+        value = values.get(name, "")
+        if value == "" or value is None:
+            if "default" in spec:
+                value = spec["default"]
+            elif spec.get("required") is True:
+                raise ValueError(f"{name} is required")
+            else:
+                continue
+        kind = spec.get("type")
+        try:
+            if kind == "string":
+                converted = value if isinstance(value, str) else str(value)
+            elif kind == "integer":
+                if isinstance(value, bool) or (isinstance(value, str) and not value.strip().lstrip("-+").isdigit()):
+                    raise ValueError
+                converted = int(value)
+            elif kind == "number":
+                if isinstance(value, bool):
+                    raise ValueError
+                converted = float(value)
+                if not math.isfinite(converted):
+                    raise ValueError
+            elif kind == "boolean":
+                lowered = str(value).lower()
+                if isinstance(value, bool):
+                    converted = value
+                elif lowered in {"true", "1", "yes"}:
+                    converted = True
+                elif lowered in {"false", "0", "no"}:
+                    converted = False
+                else:
+                    raise ValueError
+            elif kind in {"object", "array", "json"}:
+                converted = value if not isinstance(value, str) else json.loads(value)
+                if kind == "object" and not isinstance(converted, Mapping):
+                    raise ValueError
+                if kind == "array" and not isinstance(converted, list):
+                    raise ValueError
+            else:
+                converted = value
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise ValueError(f"{name} must be a valid {kind}") from error
+        if "enum" in spec and converted not in spec["enum"]:
+            raise ValueError(f"{name} must be one of enum values: {spec['enum']}")
+        result[name] = converted
+    return result
+
+
 def _action_ids(value: Any) -> list[str]:
     if isinstance(value, str):
         return [value]
@@ -175,11 +245,14 @@ class OperatorTUI(App[None]):
         self.transport = transport
         self.target = target or resolve_operator_target()
         self.catalog = load_action_catalog(CATALOG)
+        self.local_catalog = self.catalog.as_dict()
         self.actions = {action["id"]: action for action in self.catalog.actions}
         self.navigation_model = load_navigation(PRESENTATION, self.actions)
         self.cli_paths = presentation_paths(load_presentation(PRESENTATION))
         self.selected_action: Mapping[str, Any] | None = None
         self.connection = "checking"
+        self.discovery_status = "checking"
+        self.live_discovery: Mapping[str, Any] | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -202,11 +275,17 @@ class OperatorTUI(App[None]):
 
     async def probe_connection(self) -> None:
         try:
-            self.transport.discover_actions()
+            discovered = self.transport.discover_actions()
+            allowed, status = discovery_gate(self.local_catalog, discovered)
+            self.live_discovery = discovered
+            self.discovery_status = status
+            self.connection = "reachable" if allowed else "catalog drift"
+        except TransportError as error:
+            self.discovery_status = "unauthorized" if error.kind in {"unauthorized", "forbidden"} else "unavailable"
+            self.connection = self.discovery_status
         except Exception:
+            self.discovery_status = "unavailable"
             self.connection = "unavailable"
-        else:
-            self.connection = "reachable"
         self.query_one("#connection", Static).update(self.connection_text())
 
     def populate_tree(self) -> None:
@@ -248,12 +327,19 @@ class OperatorTUI(App[None]):
         if self.selected_action["status"] != "implemented":
             self.notify("This planned action is unavailable", severity="warning")
             return
+        if self.discovery_status != "clean":
+            self.notify(f"Live discovery gate is {self.discovery_status}; action unavailable", severity="warning")
+            return
         action_id = self.selected_action["id"]
-        parameters = {
+        raw_parameters = {
             name: self.query_one(f"#parameter-{name}", Input).value
             for name in self.selected_action.get("parameters", {})
-            if self.query_one(f"#parameter-{name}", Input).value != ""
         }
+        try:
+            parameters = validate_action_parameters(self.selected_action, raw_parameters)
+        except ValueError as error:
+            self.notify(str(error), severity="error")
+            return
         safety = self.selected_action.get("safety", {})
         if safety.get("confirmation") not in (None, "none"):
             self.push_screen(ConfirmationScreen(action_id), lambda answer: self.dispatch(action_id, parameters, bool(answer)))
@@ -261,6 +347,9 @@ class OperatorTUI(App[None]):
             self.dispatch(action_id, parameters, False)
 
     def dispatch(self, action_id: str, parameters: dict[str, Any], confirmed: bool) -> None:
+        if self.discovery_status != "clean":
+            self.notify(f"Live discovery gate is {self.discovery_status}; action unavailable", severity="warning")
+            return
         if self.selected_action and self.selected_action.get("safety", {}).get("confirmation") not in (None, "none") and not confirmed:
             return
         try:

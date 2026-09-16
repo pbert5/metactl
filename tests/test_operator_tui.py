@@ -10,10 +10,13 @@ from metactl_transport import OperatorTarget
 from operator_tui.app import (
     OperatorTUI,
     catalog_confirmation_label,
+    catalog_drift,
+    discovery_gate,
     load_navigation,
     physical_evidence_label,
     redact,
     safe_target_url,
+    validate_action_parameters,
 )
 
 
@@ -23,7 +26,7 @@ class FakeTransport:
     calls: list[tuple[str, dict]]
 
     def discover_actions(self):
-        return {"version": "test", "actions": [{"id": name} for name in self.responses]}
+        return {"actions": [{"id": name} for name in self.responses]}
 
     def action(self, action_id, parameters):
         self.calls.append((action_id, dict(parameters)))
@@ -224,3 +227,46 @@ def test_physical_evidence_is_tri_state_and_catalog_confirmation_is_explicit():
 def test_tui_detail_uses_the_shared_human_cli_presentation_path():
     app = OperatorTUI(transport=FakeTransport({"evolver.controllers.show": {}}, []), target=target())
     assert app.cli_paths["evolver.controllers.show"] == "metactl controllers show"
+
+
+def test_discovery_gate_requires_live_manifest_and_blocks_catalog_drift():
+    local = {"version": "1.0.0", "api": {"a": {}, "b": {}}}
+    assert discovery_gate(local, {"version": "1.0.0", "actions": [{"id": "a"}, {"id": "b"}]}) == (True, "clean")
+    assert discovery_gate(local, None) == (False, "unavailable")
+    assert discovery_gate(local, {"version": "1.0.0", "actions": [{"id": "a"}]}) == (False, "changed")
+    assert catalog_drift(local, {"version": "2.0.0", "actions": [{"id": "a"}, {"id": "b"}]}) == "changed"
+
+
+def test_catalog_parameter_validation_matches_required_type_and_enum_fields():
+    action = {"parameters": {
+        "count": {"type": "integer", "required": True},
+        "mode": {"type": "string", "enum": ["safe", "fast"]},
+        "enabled": {"type": "boolean"},
+        "payload": {"type": "json"},
+    }}
+    assert validate_action_parameters(action, {"count": "2", "mode": "safe", "enabled": "true", "payload": '{"x": 1}'}) == {
+        "count": 2, "mode": "safe", "enabled": True, "payload": {"x": 1}}
+    with pytest.raises(ValueError, match="required"):
+        validate_action_parameters(action, {})
+    with pytest.raises(ValueError, match="enum"):
+        validate_action_parameters(action, {"count": "2", "mode": "unsafe"})
+    with pytest.raises(ValueError, match="integer"):
+        validate_action_parameters(action, {"count": "2.5"})
+
+
+def test_tui_never_dispatches_until_discovery_is_clean_or_for_planned_actions():
+    transport = FakeTransport({"evolver.experiments.enqueue": {"disposition": "accepted"}}, [])
+    app = OperatorTUI(transport=transport, target=target())
+
+    async def scenario():
+        async with app.run_test(size=(120, 40)) as pilot:
+            app.selected_action = app.actions["evolver.experiments.enqueue"]
+            app.dispatch("evolver.experiments.enqueue", {"definition": "{}"}, False)
+            assert not transport.calls
+            app.discovery_status = "clean"
+            app.selected_action = app.actions["evolver.experiments.enqueue"]
+            app.on_button_pressed(Button.Pressed(app.query_one("#run")))
+            assert not transport.calls
+
+    from textual.widgets import Button
+    asyncio.run(scenario())
