@@ -234,11 +234,12 @@ class HTTPTransport:
 
 def configured_transport() -> HTTPTransport:
     target = resolve_operator_target()
+    token = os.environ.get("META_WEBUI_METACTL_TOKEN")
     return HTTPTransport(
         base_url=target.url,
         timeout=float(os.environ.get("META_WEBUI_METACTL_TIMEOUT", "10")),
-        operator=os.environ.get("META_WEBUI_METACTL_OPERATOR"),
-        token=os.environ.get("META_WEBUI_METACTL_TOKEN"),
-        shared_secret=os.environ.get("META_WEBUI_EVOLVER_CONTROL_SHARED_SECRET"),
-        permissions=os.environ.get("META_WEBUI_METACTL_PERMISSIONS"),
+        operator=os.environ.get("META_WEBUI_METACTL_OPERATOR") if not token else None,
+        token=token,
+        shared_secret=os.environ.get("META_WEBUI_EVOLVER_CONTROL_SHARED_SECRET") if not token else None,
+        permissions=os.environ.get("META_WEBUI_METACTL_PERMISSIONS") if not token else None,
     )
