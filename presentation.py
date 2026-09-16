@@ -49,7 +49,9 @@ def presentation_paths(presentation: Mapping[str, Any]) -> dict[str, str]:
             if isinstance(action_id, str):
                 result.setdefault(action_id, "metactl " + " ".join((*prefix, name)))
             elif isinstance(value, Mapping):
-                visit(value.get("commands", value), (*prefix, name))
+                children = {key: child for key, child in value.items()
+                            if key not in {"description", "positionals", "aliases", "defaults", "action_id"}}
+                visit(children, (*prefix, name))
 
     if isinstance(groups, Mapping):
         visit(groups)
