@@ -21,7 +21,7 @@ def _safe_target_url(value: str) -> str:
     """Remove URL userinfo and redact sensitive query values for diagnostics."""
     try:
         parts = urlsplit(value)
-        if not parts.scheme or not parts.netloc:
+        if not parts.netloc or (not parts.scheme and not value.startswith("//")):
             return value
         hostname = parts.hostname or ""
         port = f":{parts.port}" if parts.port is not None else ""

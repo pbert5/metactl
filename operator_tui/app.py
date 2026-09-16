@@ -43,7 +43,7 @@ def safe_target_url(value: str) -> str:
         parts = urlsplit(value)
     except ValueError:
         return "<redacted URL>"
-    if not parts.scheme or not parts.netloc:
+    if not parts.netloc or (not parts.scheme and not value.startswith("//")):
         return value
     try:
         hostname = parts.hostname or ""
@@ -65,13 +65,15 @@ def redact(value: Any, *, key: str | None = None) -> Any:
         return {name: redact(item, key=str(name)) for name, item in value.items()}
     if isinstance(value, list):
         return [redact(item) for item in value]
-    if isinstance(value, str) and (value.startswith(("http://", "https://"))):
+    if isinstance(value, str) and value.startswith(("http://", "https://", "//")):
         return safe_target_url(value)
     return value
 
 
 def physical_evidence_label(result: Mapping[str, Any]) -> str:
-    value = result.get("physical_actuation_verified")
+    command = result.get("command")
+    source = command if isinstance(command, Mapping) else result
+    value = source.get("physical_actuation_verified")
     if value is True:
         return "yes"
     if value is False:
@@ -79,16 +81,38 @@ def physical_evidence_label(result: Mapping[str, Any]) -> str:
     return "unknown (not reported)"
 
 
-def catalog_confirmation_label(safety: Mapping[str, Any]) -> str:
+def catalog_confirmation_label(safety: Mapping[str, Any], *, tags: tuple[str, ...] = ()) -> str:
     confirmation = safety.get("confirmation", "none")
-    effect = safety.get("effect", "read")
+    effect = safety.get("effect")
     if confirmation == "none" and effect == "read":
         return "SAFE / read-only"
+    if effect is None and "mutating" in tags:
+        return "catalog confirmation: operator (mutating effect)"
+    if effect is None:
+        return "catalog confirmation: unspecified effect"
     if confirmation == "physical" or effect == "hardware":
         return "catalog confirmation: physical hardware"
     if confirmation == "operator" or confirmation == "required":
         return "catalog confirmation: operator"
     return f"catalog confirmation: {confirmation}"
+
+
+def _present_command_result(result: Any) -> Any:
+    if not isinstance(result, Mapping) or not isinstance(result.get("command"), Mapping):
+        return result
+    command = result["command"]
+    disposition = command.get("disposition")
+    physical = command.get("physical_actuation_verified")
+    if not isinstance(physical, bool):
+        physical = None
+    return {
+        **result,
+        "disposition": disposition,
+        "accepted_or_queued": disposition in {"accepted", "queued"},
+        "accepted": disposition == "accepted",
+        "queued": disposition == "queued",
+        "physical_actuation_verified": physical,
+    }
 
 
 def _action_ids(value: Any) -> list[str]:
@@ -228,7 +252,7 @@ class OperatorTUI(App[None]):
         planned = action["status"] != "implemented"
         self.query_one("#detail", Static).update(
             f"{action['title']}\nAction ID: {action_id}\nStatus: {action['status']}\n"
-            f"{catalog_confirmation_label(action.get('safety', {}))}"
+            f"{catalog_confirmation_label(action.get('safety', {}), tags=tuple(action.get('tags', ())))}"
             + ("\nplanned / unavailable" if planned else ""))
         parameters = self.query_one("#parameters")
         await parameters.remove_children()
@@ -263,11 +287,11 @@ class OperatorTUI(App[None]):
         self.show_result(result)
 
     def show_result(self, result: Any) -> None:
-        result = redact(result)
-        if isinstance(result, Mapping) and result.get("disposition") in {"accepted", "queued"}:
-            disposition = "accepted/queued"
+        result = _present_command_result(redact(result))
+        if isinstance(result, Mapping) and "disposition" in result:
+            accepted_or_queued = "yes" if result.get("accepted_or_queued") else "no"
             physical = physical_evidence_label(result)
-            text = f"{disposition}\nphysical evidence: {physical}\n{json.dumps(result, indent=2, sort_keys=True)}"
+            text = f"accepted/queued: {accepted_or_queued}\nphysical evidence: {physical}\n{json.dumps(result, indent=2, sort_keys=True)}"
         else:
             text = json.dumps(result, indent=2, sort_keys=True, default=str)
         self.query_one("#detail", Static).update(text)

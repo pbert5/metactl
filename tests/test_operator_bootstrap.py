@@ -56,6 +56,23 @@ def test_doctor_redacts_target_url_credentials_and_sensitive_query_values():
     }
 
 
+def test_doctor_redacts_schemeless_url_userinfo_and_query_secrets():
+    class FakeTransport:
+        def discover_actions(self):
+            return {"version": "2", "actions": []}
+
+    report = doctor_report(
+        transport=FakeTransport(),
+        target=resolve_operator_target({
+            "META_WEBUI_METACTL_CENTRAL_URL": "//operator:password@central.test/api?shared_secret=secret&keep=yes",
+        }),
+        local_catalog={"version": "2", "api": {}},
+    )
+
+    assert report["target"]["url"] == \
+        "//central.test/api?shared_secret=%3Credacted%3E&keep=yes"
+
+
 def test_doctor_is_json_clean_and_gives_remediation_for_unreachable_target():
     class FakeTransport:
         def discover_actions(self):

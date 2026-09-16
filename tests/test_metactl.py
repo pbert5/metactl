@@ -312,7 +312,7 @@ def test_adopt_is_explicitly_forced_and_confirmation_preserving(capsys):
     assert fake.calls == [("evolver.controllers.add", {"server_url": "https://edge", "purpose": "forced_adoption", "ttl_seconds": 900})]
 
 
-def test_explicit_enrollment_action_emits_one_time_token_but_projections_redact(capsys):
+def test_explicit_enrollment_action_redacts_all_enrollment_secrets(capsys):
     module = _metactl_module()
 
     class Fake:
@@ -321,8 +321,22 @@ def test_explicit_enrollment_action_emits_one_time_token_but_projections_redact(
 
     assert module.main(["--json", "controllers", "add", "https://edge", "--yes"], transport=Fake()) == 0
     result = json.loads(capsys.readouterr().out)
-    assert result["result"]["enrollment_token"] == "one-time"
+    assert result["result"]["enrollment_token"] == "<redacted>"
     assert result["result"]["credential"] == "<redacted>"
+
+
+def test_direct_command_result_unwraps_nested_disposition_and_physical_evidence(capsys):
+    module = _metactl_module()
+
+    class Fake:
+        def action(self, action_id, parameters):
+            return {"command": {"disposition": "accepted"}}
+
+    assert module.main(["--json", "controllers", "refresh", "central-a"], transport=Fake()) == 0
+    result = json.loads(capsys.readouterr().out)["result"]
+    assert result["disposition"] == "accepted"
+    assert result["accepted_or_queued"] is True
+    assert result["physical_actuation_verified"] is None
 
 
 def test_commands_watch_polls_show_projection_and_distinguishes_actuation(capsys):

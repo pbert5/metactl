@@ -122,6 +122,23 @@ def test_mutation_requires_catalog_confirmation_and_distinguishes_accepted_from_
     asyncio.run(scenario())
 
 
+def test_nested_command_result_is_presented_as_accepted_and_tri_state_physical_evidence():
+    transport = FakeTransport({"evolver.controllers.archive": {
+        "command": {"disposition": "queued"},
+    }}, [])
+    app = OperatorTUI(transport=transport, target=target())
+
+    async def scenario():
+        async with app.run_test(size=(120, 40)):
+            app.show_result(transport.responses["evolver.controllers.archive"])
+            detail = str(app.query_one("#detail").render())
+            assert "accepted/queued: yes" in detail
+            assert "physical evidence: unknown (not reported)" in detail
+            assert '"disposition": "queued"' in detail
+
+    asyncio.run(scenario())
+
+
 def test_navigation_uses_shared_presentation_sections_and_keeps_recovery_top_level():
     app = OperatorTUI(transport=FakeTransport({}, []), target=target())
     labels = [str(node.label) for node in app.navigation_model]
@@ -166,6 +183,19 @@ def test_target_and_response_redaction_preserve_shape_without_secrets():
                      "url": "https://example.test/?secret=%3Credacted%3E", "ok": 3}
 
 
+def test_redaction_covers_enrollment_secret_fields_and_schemeless_urls():
+    assert safe_target_url("//operator:password@example.test/api?token=abc&keep=yes") == \
+        "//example.test/api?token=%3Credacted%3E&keep=yes"
+    value = redact({"enrollment": {"password": "pw", "token": "tok",
+                                    "shared_secret": "shared", "api_key": "key",
+                                    "enrollment_token": "enroll"},
+                    "url": "//operator:password@example.test/?api_key=abc"})
+    assert value == {"enrollment": {"password": "<redacted>", "token": "<redacted>",
+                                     "shared_secret": "<redacted>", "api_key": "<redacted>",
+                                     "enrollment_token": "<redacted>"},
+                     "url": "//example.test/?api_key=%3Credacted%3E"}
+
+
 def test_physical_evidence_is_tri_state_and_catalog_confirmation_is_explicit():
     assert physical_evidence_label({}) == "unknown (not reported)"
     assert physical_evidence_label({"physical_actuation_verified": False}) == "no (explicit negative)"
@@ -175,3 +205,4 @@ def test_physical_evidence_is_tri_state_and_catalog_confirmation_is_explicit():
         "catalog confirmation: operator"
     assert catalog_confirmation_label({"confirmation": "physical", "effect": "hardware"}) == \
         "catalog confirmation: physical hardware"
+    assert catalog_confirmation_label({"confirmation": "none"}, tags=("mutating",)) != "SAFE / read-only"

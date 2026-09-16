@@ -13,6 +13,7 @@ from pathlib import Path
 import sys
 import time
 from typing import Any, Mapping
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 REPOSITORY_ROOT = Path(os.environ.get("META_WEBUI_REPOSITORY_ROOT", Path(__file__).resolve().parents[1]))
 
@@ -96,25 +97,50 @@ def _redact(value: Any) -> Any:
                 for key, item in value.items()}
     if isinstance(value, list):
         return [_redact(item) for item in value]
+    if isinstance(value, str) and value.startswith(("http://", "https://", "//")):
+        return _safe_target_url(value, sensitive)
     return value
 
 
-def _registry(transport: Any) -> dict[str, Any]:
-    def enrollment_output(value: Any) -> Any:
-        if isinstance(value, dict):
-            return {key: (item if key == "enrollment_token" else "<redacted>" if key == "credential" else enrollment_output(item))
-                    for key, item in value.items()}
-        if isinstance(value, list):
-            return [enrollment_output(item) for item in value]
-        return value
+def _safe_target_url(value: str, sensitive: tuple[str, ...]) -> str:
+    try:
+        parts = urlsplit(value)
+        if not parts.netloc or (not parts.scheme and not value.startswith("//")):
+            return value
+        hostname = parts.hostname or ""
+        port = f":{parts.port}" if parts.port is not None else ""
+        query = urlencode([
+            (key, "<redacted>" if any(part in key.lower() for part in sensitive) else item)
+            for key, item in parse_qsl(parts.query, keep_blank_values=True)
+        ])
+        return urlunsplit((parts.scheme, hostname + port, parts.path, query, ""))
+    except ValueError:
+        return "<redacted URL>"
 
+
+def _present_command_result(value: Any) -> Any:
+    if not isinstance(value, Mapping) or not isinstance(value.get("command"), Mapping):
+        return value
+    command = value["command"]
+    disposition = command.get("disposition")
+    physical = command.get("physical_actuation_verified")
+    if not isinstance(physical, bool):
+        physical = None
+    return {
+        **value,
+        "disposition": disposition,
+        "accepted_or_queued": disposition in {"accepted", "queued"},
+        "accepted": disposition == "accepted",
+        "queued": disposition == "queued",
+        "physical_actuation_verified": physical,
+    }
+
+
+def _registry(transport: Any) -> dict[str, Any]:
     def invoke(parameters: Mapping[str, Any], action_id: str) -> Any:
         try:
             result = transport.action(action_id, parameters)
-            # A one-time enrollment credential is the bounded output of this
-            # explicit operator action; every other central projection stays
-            # structurally redacted.  The token is never persisted by metactl.
-            return enrollment_output(result) if action_id == "evolver.controllers.add" else _redact(result)
+            return _present_command_result(_redact(result))
         except TransportError as error:
             return error.as_dict()
     return {action_id: (lambda params, action_id=action_id: invoke(params, action_id))
