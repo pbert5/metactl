@@ -1,0 +1,7 @@
+{
+  "responses": [
+    {"method": "GET", "path": "/api/evolver/controllers", "status": 200,
+     "headers": {"Content-Type": "application/json"},
+     "body": {"controllers": [{"controller_id": "SIM-01", "status": "offline-fixture"}]}}
+  ]
+}
