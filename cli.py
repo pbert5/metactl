@@ -323,12 +323,16 @@ def _watch(arguments: list[str], transport: Any, *, as_json: bool,
             break
         time.sleep(min(interval, max(0, deadline - time.monotonic())))
     terminal = disposition in _TERMINAL_DISPOSITIONS
+    physical = command.get("physical_actuation_verified") if isinstance(command, Mapping) else None
+    if not isinstance(physical, bool):
+        physical = None
     payload = {"status": "completed" if terminal else "timeout", "action": "evolver.controllers.commands.show",
                "result": {"controller_id": controller_id, "command_id": command_id,
                            "disposition": disposition, "command": result,
                            "accepted_or_queued": disposition in {"accepted", "queued"},
-                           "physical_actuation_verified": bool(
-                               isinstance(command, Mapping) and command.get("physical_actuation_verified") is True)}}
+                           "accepted": disposition == "accepted",
+                           "queued": disposition == "queued",
+                           "physical_actuation_verified": physical}}
     output = output or sys.stdout
     output.write(json.dumps(payload, sort_keys=True, default=str) + "\n")
     return 0

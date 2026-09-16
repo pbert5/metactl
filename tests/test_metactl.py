@@ -342,8 +342,40 @@ def test_commands_watch_polls_show_projection_and_distinguishes_actuation(capsys
     result = json.loads(capsys.readouterr().out)
     assert result["status"] == "completed"
     assert result["result"]["disposition"] == "completed"
-    assert result["result"]["physical_actuation_verified"] is False
+    assert result["result"]["physical_actuation_verified"] is None
+    assert result["result"]["accepted"] is False
+    assert result["result"]["queued"] is False
     assert len(fake.calls) == 2
+
+
+@pytest.mark.parametrize(
+    ("disposition", "physical", "accepted", "queued"),
+    [
+        ("accepted", None, True, False),
+        ("queued", False, False, True),
+        ("completed", True, False, False),
+    ],
+)
+def test_commands_watch_report_preserves_disposition_and_tri_state_evidence(
+    capsys, disposition, physical, accepted, queued
+):
+    module = _metactl_module()
+
+    class Fake:
+        def action(self, action_id, parameters):
+            return {"command": {"disposition": disposition, **(
+                {} if physical is None else {"physical_actuation_verified": physical}
+            )}}
+
+    assert module.main([
+        "--json", "controllers", "commands", "watch", "central-a", "cmd-1",
+        "--timeout", "0",
+    ], transport=Fake()) == 0
+    result = json.loads(capsys.readouterr().out)["result"]
+    assert result["disposition"] == disposition
+    assert result["physical_actuation_verified"] is physical
+    assert result["accepted"] is accepted
+    assert result["queued"] is queued
 
 
 def test_central_http_transport_binds_route_headers_and_body():

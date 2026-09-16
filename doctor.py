@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 try:
     from .metactl_transport import OperatorTarget, TransportError, configured_transport, resolve_operator_target
@@ -13,6 +14,24 @@ except ImportError:
 
 
 CATALOG = Path(__file__).with_name("applications") / "evolver" / "actions.json"
+_SENSITIVE_URL_PARTS = ("credential", "password", "secret", "token", "private_key", "api_key", "authorization")
+
+
+def _safe_target_url(value: str) -> str:
+    """Remove URL userinfo and redact sensitive query values for diagnostics."""
+    try:
+        parts = urlsplit(value)
+        if not parts.scheme or not parts.netloc:
+            return value
+        hostname = parts.hostname or ""
+        port = f":{parts.port}" if parts.port is not None else ""
+        query = urlencode([
+            (key, "<redacted>" if any(part in key.lower() for part in _SENSITIVE_URL_PARTS) else item)
+            for key, item in parse_qsl(parts.query, keep_blank_values=True)
+        ])
+        return urlunsplit((parts.scheme, hostname + port, parts.path, query, ""))
+    except ValueError:
+        return "<redacted URL>"
 
 
 def _read_catalog(path: Path) -> dict[str, Any]:
@@ -23,7 +42,7 @@ def doctor_report(*, transport: Any = None, target: OperatorTarget | None = None
                   local_catalog: Mapping[str, Any] | None = None) -> dict[str, Any]:
     target = target or resolve_operator_target()
     report: dict[str, Any] = {
-        "target": {"url": target.url, "source": target.source},
+        "target": {"url": _safe_target_url(target.url), "source": target.source},
         "reachable": False,
         "auth": {name: bool(target.auth.get(name, False)) for name in ("operator", "token", "shared_secret")},
         "discovery": {"status": "unavailable"},
