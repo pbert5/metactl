@@ -6,7 +6,7 @@ import re
 import pytest
 
 from framework.action_catalog import ActionCatalogError, load_action_catalog, parse_action_catalog
-from metactl_transport import HTTPTransport, TransportError, operator_action_ids
+from metactl_transport import HTTPTransport, TransportError, _headers, operator_action_ids
 
 
 CATALOG = Path(__file__).parents[1] / "applications/evolver/actions.json"
@@ -41,6 +41,16 @@ def test_transport_expands_and_encodes_catalog_route():
         return 200, b"{}"
     HTTPTransport(base_url="http://central", sender=sender).action("evolver.controllers.show", {"controller_id": "a/b"})
     assert seen == {"url": "http://central/api/evolver/controllers/a%2Fb", "method": "GET"}
+
+
+def test_bearer_mode_does_not_forward_proxy_operator_credentials():
+    headers = _headers(operator="alice", token="human-token", shared_secret="proxy-secret",
+                       permissions="operate_run")
+
+    assert headers["Authorization"] == "Bearer human-token"
+    assert "X-Meta-Webui-Evolver-Operator" not in headers
+    assert "X-Meta-Webui-Evolver-Control-Secret" not in headers
+    assert "X-Meta-Webui-Evolver-Permissions" not in headers
 
 
 def test_transport_maps_optional_get_parameters_to_query_string():

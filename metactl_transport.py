@@ -140,12 +140,13 @@ def _headers(*, operator: str | None, token: str | None, shared_secret: str | No
     result = {"Accept": "application/json", "Content-Type": "application/json"}
     if token:
         result["Authorization"] = token if token.lower().startswith("bearer ") else f"Bearer {token}"
-    if operator:
-        result["X-Meta-Webui-Evolver-Operator"] = operator
-    if permissions:
-        result["X-Meta-Webui-Evolver-Permissions"] = permissions
-    if shared_secret:
-        result["X-Meta-Webui-Evolver-Control-Secret"] = shared_secret
+    elif operator or permissions or shared_secret:
+        if operator:
+            result["X-Meta-Webui-Evolver-Operator"] = operator
+        if permissions:
+            result["X-Meta-Webui-Evolver-Permissions"] = permissions
+        if shared_secret:
+            result["X-Meta-Webui-Evolver-Control-Secret"] = shared_secret
     return result
 
 

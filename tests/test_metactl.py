@@ -412,7 +412,7 @@ def test_central_http_transport_binds_route_headers_and_body():
         seen.update(url=url, method=method, body=body, headers=dict(headers), timeout=timeout)
         return 200, b'{"accepted":true}'
     client = HTTPTransport(base_url="http://central.test/", sender=sender,
-                           operator="alice", token="secret", shared_secret="proxy",
+                           operator="alice", shared_secret="proxy",
                            permissions="evolver:runs:write")
     # The run.* entries are planned catalog surfaces; the implemented
     # revision-fenced operator action is runs.pause.
@@ -420,9 +420,17 @@ def test_central_http_transport_binds_route_headers_and_body():
     assert seen["url"] == "http://central.test/api/evolver/runs/run-a/commands"
     assert seen["method"] == "POST"
     assert seen["body"] == {"action": "pause", "run_id": "run-a", "expected_revision": 1}
-    assert seen["headers"]["Authorization"] == "Bearer secret"
     assert seen["headers"]["X-Meta-Webui-Evolver-Operator"] == "alice"
     assert seen["headers"]["X-Meta-Webui-Evolver-Control-Secret"] == "proxy"
+
+    seen.clear()
+    bearer_client = HTTPTransport(base_url="http://gateway.test/", sender=sender,
+                                  operator="alice", token="secret", shared_secret="proxy",
+                                  permissions="evolver:runs:write")
+    bearer_client.action("evolver.runs.pause", {"run_id": "run-a", "expected_revision": 1})
+    assert seen["headers"]["Authorization"] == "Bearer secret"
+    assert "X-Meta-Webui-Evolver-Operator" not in seen["headers"]
+    assert "X-Meta-Webui-Evolver-Control-Secret" not in seen["headers"]
 
 
 def test_metactl_release_build_presents_grouped_action_and_central_route(capsys):
