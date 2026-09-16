@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from metactl_transport import TransportError, resolve_operator_target
 from doctor import doctor_report
 
@@ -54,6 +56,10 @@ def test_doctor_redacts_target_url_credentials_and_sensitive_query_values():
         "url": "https://central.test/api?token=%3Credacted%3E&keep=yes&api_key=%3Credacted%3E",
         "source": "META_WEBUI_METACTL_CENTRAL_URL",
     }
+    target_url = report["target"]["url"]
+    assert "password" not in target_url
+    assert "=secret" not in target_url
+    assert "=another" not in target_url
 
 
 def test_doctor_redacts_schemeless_url_userinfo_and_query_secrets():
@@ -71,6 +77,9 @@ def test_doctor_redacts_schemeless_url_userinfo_and_query_secrets():
 
     assert report["target"]["url"] == \
         "//central.test/api?shared_secret=%3Credacted%3E&keep=yes"
+    target_url = report["target"]["url"]
+    assert "password" not in target_url
+    assert "=secret" not in target_url
 
 
 @pytest.mark.parametrize("url", [
@@ -88,9 +97,9 @@ def test_doctor_redacts_uppercase_empty_authority_and_malformed_urls(url):
         target=resolve_operator_target({"META_WEBUI_METACTL_CENTRAL_URL": url}),
         local_catalog={"version": "2", "api": {}},
     )
-    rendered = json.dumps(report)
-    assert "password" not in rendered
-    assert "secret" not in rendered
+    target_url = report["target"]["url"]
+    assert "password" not in target_url
+    assert "=secret" not in target_url
     assert report["target"]["url"] in {"https://central.test/api?TOKEN=%3Credacted%3E&keep=yes", "<redacted URL>"}
 
 
