@@ -7,7 +7,7 @@ boundary and can be given a sender fixture without opening a socket.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
@@ -39,6 +39,30 @@ class Route:
 
 
 _CATALOG_PATH = Path(__file__).with_name("applications") / "evolver" / "actions.json"
+
+
+@dataclass(frozen=True)
+class OperatorTarget:
+    """Resolved operator endpoint and non-secret configuration provenance."""
+
+    url: str
+    source: str
+    auth: Mapping[str, bool] = field(default_factory=dict)
+
+
+def resolve_operator_target(environ: Mapping[str, str] | None = None) -> OperatorTarget:
+    values = os.environ if environ is None else environ
+    candidates = (
+        ("META_WEBUI_METACTL_CENTRAL_URL", values.get("META_WEBUI_METACTL_CENTRAL_URL")),
+        ("META_WEBUI_EVOLVER_CONTROL_URL", values.get("META_WEBUI_EVOLVER_CONTROL_URL")),
+    )
+    source, url = next(((name, value) for name, value in candidates if value),
+                       ("default", "http://127.0.0.1:18087"))
+    return OperatorTarget(url.rstrip("/"), source, {
+        "operator": bool(values.get("META_WEBUI_METACTL_OPERATOR")),
+        "token": bool(values.get("META_WEBUI_METACTL_TOKEN")),
+        "shared_secret": bool(values.get("META_WEBUI_EVOLVER_CONTROL_SHARED_SECRET")),
+    })
 
 
 def action_contract(action_id: str) -> tuple[Route, dict[str, Any]]:
@@ -183,6 +207,21 @@ class HTTPTransport:
         except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
             raise TransportError("network_failure", "central control plane is unavailable") from exc
 
+    def discover_actions(self) -> dict[str, Any]:
+        """Read the server's action manifest without invoking an action."""
+        try:
+            status, raw_payload = self.sender(self.base_url + "/api/actions", "GET", None,
+                                              self.headers, self.timeout)
+            payload = _decode(raw_payload, int(status)) if raw_payload is not None else None
+            result = _normalize(int(status), payload)
+            if not isinstance(result, dict):
+                raise TransportError("malformed_response", "action discovery must be a JSON object", status=int(status))
+            return result
+        except TransportError:
+            raise
+        except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+            raise TransportError("network_failure", "central control plane is unavailable") from exc
+
     @staticmethod
     def _send(url: str, method: str, body: Json, headers: Mapping[str, str], timeout: float) -> tuple[int, bytes]:
         data = json.dumps(body).encode("utf-8") if body is not None else None
@@ -194,8 +233,9 @@ class HTTPTransport:
 
 
 def configured_transport() -> HTTPTransport:
+    target = resolve_operator_target()
     return HTTPTransport(
-        base_url=os.environ.get("META_WEBUI_METACTL_CENTRAL_URL", os.environ.get("META_WEBUI_EVOLVER_CONTROL_URL", "http://127.0.0.1:18087")),
+        base_url=target.url,
         timeout=float(os.environ.get("META_WEBUI_METACTL_TIMEOUT", "10")),
         operator=os.environ.get("META_WEBUI_METACTL_OPERATOR"),
         token=os.environ.get("META_WEBUI_METACTL_TOKEN"),
