@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from metactl_transport import TransportError, resolve_operator_target
 from doctor import doctor_report
 
