@@ -42,7 +42,7 @@ def _catalog_paths(index_path: Path) -> list[Path]:
         if not isinstance(item, Mapping) or not isinstance(item.get("id"), str) or not isinstance(item.get("path"), str):
             raise ActionCatalogError(f"{index_path}: each catalog reference requires id and path")
         path = (index_path.parent / item["path"]).resolve()
-        applications_root = index_path.parent.parent
+        applications_root = index_path.parent.parent.resolve()
         if applications_root not in path.parents:
             raise ActionCatalogError(f"{index_path}: catalog path escapes applications directory: {item['path']}")
         paths.append(path)
@@ -79,12 +79,13 @@ def _layout(index_path: Path) -> dict[str, Any]:
             parameters = {}
             for name, spec in action.get("parameters", {}).items():
                 parameter = dict(spec)
-                if "enum" in parameter:
-                    parameter["choices"] = parameter.pop("enum")
                 parameters[name] = parameter
             entry["parameters"] = parameters
             actions[identifier] = entry
-    return {"name": "metactl", "description": "Meta WebUI action catalog", "actions": actions}
+    presentation_path = index_path.parent / "metactl-cli.json"
+    presentation = json.loads(presentation_path.read_text(encoding="utf-8")) if presentation_path.is_file() else {}
+    return {"name": "metactl", "description": "Meta WebUI action catalog", "actions": actions,
+            "presentation": presentation}
 
 
 def _redact(value: Any) -> Any:
@@ -203,12 +204,29 @@ def _interactive(arguments: list[str], index_path: Path, transport: Any, *, inpu
     return run_cli(layout, _registry(transport), command, input=input_stream, output=output)
 
 
-def _human_arguments(arguments: list[str]) -> list[str]:
+def _human_arguments(arguments: list[str], presentation: Mapping[str, Any] | None = None) -> list[str]:
     """Translate grouped operator syntax into stable action-id arguments."""
     leading = []
     while arguments and arguments[0] in {"--json", "--dry-run", "--yes"}:
         leading.append(arguments.pop(0))
-    for prefix, action_id in sorted(_HUMAN_ALIASES.items(), key=lambda item: -len(item[0])):
+    aliases = dict(_HUMAN_ALIASES)
+    defaults: dict[tuple[str, ...], Mapping[str, Any]] = {}
+    def collect(tree: Mapping[str, Any], prefix: tuple[str, ...] = ()) -> None:
+        for name, value in tree.items():
+            leaf = value if isinstance(value, str) else value.get("action_id") if isinstance(value, Mapping) else None
+            if isinstance(leaf, str):
+                aliases.setdefault(prefix + (name,), leaf)
+                if isinstance(value, Mapping):
+                    defaults[prefix + (name,)] = value.get("defaults", {})
+            elif isinstance(value, Mapping):
+                children = value.get("commands", value)
+                if isinstance(children, Mapping):
+                    collect(children, prefix + (name,))
+    if isinstance(presentation, Mapping):
+        groups = presentation.get("groups", presentation)
+        if isinstance(groups, Mapping):
+            collect(groups)
+    for prefix, action_id in sorted(aliases.items(), key=lambda item: -len(item[0])):
         if tuple(arguments[:len(prefix)]) != prefix:
             continue
         tail = arguments[len(prefix):]
@@ -218,6 +236,10 @@ def _human_arguments(arguments: list[str]) -> list[str]:
                 raise ValueError("controllers adopt requires --purpose forced_adoption")
             if not purpose_positions:
                 tail.extend(["--purpose", "forced_adoption"])
+        for name, value in defaults.get(prefix, {}).items():
+            option = f"--{name.replace('_', '-')}"
+            if option not in tail:
+                tail.extend([option, str(value)])
 
         positional: list[str] = []
         if tail and not tail[0].startswith("-"):
@@ -313,7 +335,7 @@ def _watch(arguments: list[str], transport: Any, *, as_json: bool,
 
 def main(argv: list[str] | None = None, *, transport: Any | None = None,
          input: Any | None = None, output: Any | None = None) -> int:
-    index_path = Path(__file__).with_name("applications") / "evolver" / "actions.json"
+    index_path = Path(__file__).with_name("applications") / "deployment" / "action-catalog.json"
     try:
         arguments = list(sys.argv[1:] if argv is None else argv)
         # A bare invocation is a discovery landing page, not an incomplete
@@ -355,7 +377,8 @@ def main(argv: list[str] | None = None, *, transport: Any | None = None,
                               output=output)
         if watch_result is not None:
             return watch_result
-        return run_cli(_layout(index_path), _registry(chosen_transport), _human_arguments(arguments))
+        layout = _layout(index_path)
+        return run_cli(layout, _registry(chosen_transport), _human_arguments(arguments, layout.get("presentation")))
     except (ActionCatalogError, OSError, ValueError, KeyError) as error:
         print(f"metactl: {error}", file=sys.stderr)
         return 2

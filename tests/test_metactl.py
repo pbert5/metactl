@@ -58,6 +58,86 @@ def test_top_level_tui_alias_exposes_api_workbench_help(capsys):
     assert "usage: metactl api" in capsys.readouterr().out
 
 
+def test_controllers_help_is_a_real_nested_parser_path(capsys):
+    module = _metactl_module()
+    with pytest.raises(SystemExit) as raised:
+        module.main(["controllers", "--help"], transport=object())
+    assert raised.value.code == 0
+    text = capsys.readouterr().out
+    assert "show" in text
+    assert "freshness" in text
+    assert "recovery" in text
+
+
+def test_nested_human_path_and_raw_action_id_dispatch_same_action(capsys):
+    module = _metactl_module()
+
+    class Fake:
+        def __init__(self):
+            self.calls = []
+
+        def action(self, action_id, parameters):
+            self.calls.append((action_id, parameters))
+            return {"ok": True}
+
+    fake = Fake()
+    assert module.main(["controllers", "show", "edge-a", "--json"], transport=fake) == 0
+    capsys.readouterr()
+    human_call = fake.calls[-1]
+    assert module.main(["evolver.controllers.show", "--controller-id", "edge-a", "--json"], transport=fake) == 0
+    capsys.readouterr()
+    assert fake.calls[-1] == human_call
+
+
+def test_compatibility_alias_is_preserved_by_presentation_model(capsys):
+    module = _metactl_module()
+
+    class Fake:
+        def __init__(self):
+            self.calls = []
+
+        def action(self, action_id, parameters):
+            self.calls.append((action_id, parameters))
+            return {"ok": True}
+
+    fake = Fake()
+    assert module.main(["controllers", "adopt", "https://edge", "--yes", "--json"], transport=fake) == 0
+    capsys.readouterr()
+    assert fake.calls[-1][0] == "evolver.controllers.add"
+
+
+def test_planned_human_path_is_visible_but_never_dispatched(capsys):
+    module = _metactl_module()
+
+    class Fake:
+        def __init__(self):
+            self.calls = []
+
+        def action(self, action_id, parameters):
+            self.calls.append((action_id, parameters))
+            return {"unexpected": True}
+
+    fake = Fake()
+    assert module.main(["experiments", "enqueue", "--definition", "{}", "--json"], transport=fake) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["reason"] == "unavailable"
+    assert result["action"] == "evolver.experiments.enqueue"
+    assert fake.calls == []
+
+
+def test_json_output_contains_only_one_machine_readable_document(capsys):
+    module = _metactl_module()
+
+    class Fake:
+        def action(self, action_id, parameters):
+            return {"action_id": action_id, "parameters": parameters}
+
+    assert module.main(["controllers", "list", "--json"], transport=Fake()) == 0
+    output = capsys.readouterr()
+    assert output.err == ""
+    assert json.loads(output.out)["action"] == "evolver.controllers.list"
+
+
 def test_deployment_catalog_references_are_explicit_and_valid():
     index = json.loads((ROOT / "applications/deployment/action-catalog.json").read_text())
     assert index["deployment_index"] == [reference["id"] for reference in index["catalogs"]]
