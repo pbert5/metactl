@@ -12,7 +12,7 @@ import json
 import os
 from pathlib import Path
 import re
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 from http import HTTPStatus
 from typing import Any, Callable, Mapping, Protocol
 from urllib.error import HTTPError, URLError
@@ -65,6 +65,26 @@ def resolve_operator_target(environ: Mapping[str, str] | None = None) -> Operato
     })
 
 
+def validate_base_url(value: str) -> str:
+    """Validate an operator base URL before it can reach the network."""
+    if not isinstance(value, str) or not value:
+        raise TransportError("malformed_target", "operator target must be a non-empty HTTP(S) URL")
+    try:
+        parts = urlsplit(value)
+        hostname = parts.hostname
+        if parts.scheme.lower() not in {"http", "https"} or not parts.netloc or not hostname:
+            raise ValueError("missing HTTP(S) authority")
+        if parts.username is not None or parts.password is not None:
+            raise ValueError("credentials are not allowed in operator targets")
+        if parts.query or parts.fragment:
+            raise ValueError("query strings and fragments are not allowed in operator targets")
+        if parts.port is not None and not 0 < parts.port < 65536:
+            raise ValueError("invalid port")
+    except (ValueError, UnicodeError) as exc:
+        raise TransportError("malformed_target", "operator target must be an HTTP(S) URL without credentials") from exc
+    return value.rstrip("/")
+
+
 def action_contract(action_id: str) -> tuple[Route, dict[str, Any]]:
     """Resolve transport mechanics from the validated canonical catalog."""
     try:
@@ -110,8 +130,7 @@ class TransportError(RuntimeError):
 def _normalize(status: int, payload: Json) -> Json:
     if status in {401, 403, 404, 409}:
         kinds = {401: "unauthorized", 403: "forbidden", 404: "not_found", 409: "conflict"}
-        message = payload.get("error") if isinstance(payload, Mapping) else None
-        raise TransportError(kinds[status], str(message or HTTPStatus(status).phrase), status=status)
+        raise TransportError(kinds[status], HTTPStatus(status).phrase, status=status)
     if status >= 500:
         raise TransportError("central_failure", "central control plane failure", status=status)
     if status < 200 or status >= 300:
@@ -177,7 +196,7 @@ class HTTPTransport:
     def __init__(self, *, base_url: str, timeout: float = 10, sender: Sender | None = None,
                  operator: str | None = None, token: str | None = None,
                  shared_secret: str | None = None, permissions: str | None = None) -> None:
-        self.base_url = base_url.rstrip("/")
+        self.base_url = validate_base_url(base_url)
         self.timeout = timeout
         self.sender = sender or self._send
         self.headers = _headers(operator=operator, token=token, shared_secret=shared_secret, permissions=permissions)

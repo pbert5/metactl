@@ -43,6 +43,25 @@ def test_transport_expands_and_encodes_catalog_route():
     assert seen == {"url": "http://central/api/evolver/controllers/a%2Fb", "method": "GET"}
 
 
+@pytest.mark.parametrize("base_url", [
+    "https://user:password@central.test",
+    "https://central.test/api?token=secret",
+    "http:///missing-authority",
+])
+def test_transport_rejects_secret_bearing_or_malformed_base_urls(base_url):
+    called = False
+
+    def sender(*args):
+        nonlocal called
+        called = True
+        return 200, b"{}"
+
+    with pytest.raises(TransportError) as raised:
+        HTTPTransport(base_url=base_url, sender=sender)
+    assert raised.value.kind == "malformed_target"
+    assert called is False
+
+
 def test_bearer_mode_does_not_forward_proxy_operator_credentials():
     headers = _headers(operator="alice", token="human-token", shared_secret="proxy-secret",
                        permissions="operate_run")

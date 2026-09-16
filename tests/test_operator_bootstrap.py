@@ -6,6 +6,7 @@ import pytest
 
 from metactl_transport import TransportError, resolve_operator_target
 from doctor import doctor_report
+from presentation import redact
 
 
 def test_operator_target_prefers_metactl_url(monkeypatch):
@@ -120,6 +121,24 @@ def test_doctor_is_json_clean_and_gives_remediation_for_unreachable_target():
     assert "unavailable" in json.dumps(report)
 
 
+@pytest.mark.parametrize("status,kind,remediation", [
+    (401, "unauthorized", "META_WEBUI_METACTL_TOKEN"),
+    (403, "forbidden", "permitted by the WebUI gateway"),
+])
+def test_doctor_preserves_auth_failure_class_and_safe_remediation(status, kind, remediation):
+    class FakeTransport:
+        def discover_actions(self):
+            raise TransportError(kind, "secret must not be echoed", status=status)
+
+    report = doctor_report(transport=FakeTransport(), target=resolve_operator_target({
+        "META_WEBUI_METACTL_CENTRAL_URL": "https://gateway.test",
+    }))
+
+    assert report["discovery"] == {"status": "error", "kind": kind, "status_code": status}
+    assert remediation in " ".join(report["remediation"])
+    assert "secret must not" not in json.dumps(report)
+
+
 def test_doctor_treats_unexpected_probe_failure_as_unavailable():
     class FakeTransport:
         def discover_actions(self):
@@ -133,3 +152,35 @@ def test_doctor_treats_unexpected_probe_failure_as_unavailable():
     assert report["reachable"] is False
     assert report["discovery"]["status"] == "unavailable"
     assert "controller-first" not in json.dumps(report)
+
+
+def test_doctor_does_not_collapse_unexpected_non_network_failures():
+    class FakeTransport:
+        def discover_actions(self):
+            raise RuntimeError("implementation bug")
+
+    with pytest.raises(RuntimeError, match="implementation bug"):
+        doctor_report(transport=FakeTransport(), target=resolve_operator_target({
+            "META_WEBUI_METACTL_CENTRAL_URL": "http://central.test",
+        }))
+
+
+def test_presentation_redacts_nested_credentials_and_urls():
+    value = redact({"outer": [{"access_token": "secret", "url": "//user:pw@central.test/?token=x"}],
+                    "safe": "value"})
+    assert value == {"outer": [{"access_token": "<redacted>",
+                                 "url": "//central.test/?token=%3Credacted%3E"}],
+                     "safe": "value"}
+
+
+def test_doctor_distinguishes_malformed_discovery_from_network_failure():
+    class FakeTransport:
+        def discover_actions(self):
+            return {"version": "1", "actions": {"not": "a list"}}
+
+    report = doctor_report(transport=FakeTransport(), target=resolve_operator_target({
+        "META_WEBUI_METACTL_CENTRAL_URL": "http://central.test",
+    }))
+
+    assert report["discovery"] == {"status": "error", "kind": "malformed_response"}
+    assert "valid JSON" in " ".join(report["remediation"])

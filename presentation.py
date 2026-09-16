@@ -31,6 +31,21 @@ def safe_target_url(value: str) -> str:
         return "<redacted URL>"
 
 
+def redact(value: Any, *, key: str | None = None) -> Any:
+    """Recursively redact secret-shaped fields and embedded target URLs."""
+    if key is not None and any(part in key.lower() for part in SENSITIVE_URL_PARTS):
+        return "<redacted>"
+    if isinstance(value, Mapping):
+        return {name: redact(item, key=str(name)) for name, item in value.items()}
+    if isinstance(value, list):
+        return [redact(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(redact(item) for item in value)
+    if isinstance(value, str) and value.startswith(("http://", "https://", "//")):
+        return safe_target_url(value)
+    return value
+
+
 def load_presentation(path: Path) -> Mapping[str, Any]:
     document = json.loads(path.read_text(encoding="utf-8"))
     return document if isinstance(document, Mapping) else {}

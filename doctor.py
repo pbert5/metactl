@@ -30,7 +30,14 @@ def doctor_report(*, transport: Any = None, target: OperatorTarget | None = None
         "drift": {"status": "not_checked"},
         "remediation": [],
     }
-    client = transport or configured_transport()
+    try:
+        client = transport or configured_transport()
+    except TransportError as error:
+        discovery_status = "unavailable" if error.kind == "network_failure" else "error"
+        report["discovery"] = {"status": discovery_status, "kind": error.kind, **(
+            {"status_code": error.status} if error.status is not None else {})}
+        report["remediation"] = _remediation(error.kind)
+        return report
     try:
         discovered = client.discover_actions()
         report["reachable"] = True
@@ -38,11 +45,15 @@ def doctor_report(*, transport: Any = None, target: OperatorTarget | None = None
         if not isinstance(actions, list):
             raise TransportError("malformed_response", "action discovery was malformed")
         report["discovery"] = {"status": "ok", "version": discovered.get("version"), "actions": len(actions)}
-    except Exception:
-        # A doctor probe must never turn an implementation detail into output;
-        # only successful /api/actions discovery establishes reachability.
-        report["discovery"] = {"status": "unavailable"}
-        report["remediation"] = ["rtk tools/dev-env server network", "rtk tools/dev-env server exec metactl doctor"]
+    except TransportError as error:
+        discovery_status = "unavailable" if error.kind == "network_failure" else "error"
+        report["discovery"] = {"status": discovery_status, "kind": error.kind, **(
+            {"status_code": error.status} if error.status is not None else {})}
+        report["remediation"] = _remediation(error.kind)
+        return report
+    except OSError:
+        report["discovery"] = {"status": "unavailable", "kind": "network_failure"}
+        report["remediation"] = _remediation("network_failure")
         return report
 
     if local_catalog is None:
@@ -58,3 +69,15 @@ def doctor_report(*, transport: Any = None, target: OperatorTarget | None = None
     report["drift"] = {"status": "clean" if local_ids == live_ids and local_catalog.get("version") == discovered.get("version") else "changed",
                         "local_actions": len(local_ids), "live_actions": len(live_ids)}
     return report
+
+
+def _remediation(kind: str) -> list[str]:
+    if kind == "unauthorized":
+        return ["set META_WEBUI_METACTL_TOKEN for the WebUI gateway", "verify the token is current"]
+    if kind == "forbidden":
+        return ["use an operator identity permitted by the WebUI gateway", "ask an administrator to grant the required permission"]
+    if kind == "malformed_target":
+        return ["set META_WEBUI_METACTL_CENTRAL_URL to an HTTP(S) URL without credentials, query parameters, or fragments"]
+    if kind == "malformed_response":
+        return ["verify the WebUI gateway exposes /api/actions", "check that the gateway response is valid JSON"]
+    return ["rtk tools/dev-env server network", "rtk tools/dev-env server exec metactl doctor"]
