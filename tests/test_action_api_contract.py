@@ -6,7 +6,7 @@ import re
 import pytest
 
 from framework.action_catalog import ActionCatalogError, load_action_catalog, parse_action_catalog
-from metactl_transport import HTTPTransport, TransportError, operator_action_ids
+from metactl_transport import HTTPTransport, TransportError, _headers, operator_action_ids
 
 
 CATALOG = Path(__file__).parents[1] / "applications/evolver/actions.json"
@@ -14,6 +14,20 @@ CATALOG = Path(__file__).parents[1] / "applications/evolver/actions.json"
 
 def _catalog():
     return load_action_catalog(CATALOG)
+
+
+def test_enrollment_catalog_matches_endpoint_contract_and_preserves_controls():
+    action = _catalog().action("evolver.controllers.add")
+    assert action is not None
+    assert action["parameters"] == {
+        "server_url": {"type": "string"},
+        "endpoint_id": {"type": "string"},
+        "ttl_seconds": {"type": "integer", "default": 900},
+        "purpose": {"type": "string", "default": "enrollment"},
+        "release_binding": {"type": "object"},
+    }
+    assert action["safety"] == {"risk": "medium", "confirmation": "required", "reversible": True}
+    assert action["permissions"] == ["manage_controller"]
 
 
 def test_operator_routes_are_catalog_owned_and_complete():
@@ -41,6 +55,70 @@ def test_transport_expands_and_encodes_catalog_route():
         return 200, b"{}"
     HTTPTransport(base_url="http://central", sender=sender).action("evolver.controllers.show", {"controller_id": "a/b"})
     assert seen == {"url": "http://central/api/evolver/controllers/a%2Fb", "method": "GET"}
+
+
+def test_enrollment_transport_forwards_endpoint_and_release_binding_fields():
+    seen = {}
+
+    def sender(url, method, body, headers, timeout):
+        seen.update(url=url, method=method, body=body)
+        return 201, b"{}"
+
+    HTTPTransport(base_url="http://central", sender=sender).action(
+        "evolver.controllers.add",
+        {"endpoint_id": "central", "release_binding": {
+            "release": "r1", "source_revision": "abcdef1", "manifest_sha256": "a" * 64,
+        }},
+    )
+    assert seen == {
+        "url": "http://central/api/evolver/enrollment-tokens",
+        "method": "POST",
+        "body": {"action": "add", "endpoint_id": "central", "release_binding": {
+            "release": "r1", "source_revision": "abcdef1", "manifest_sha256": "a" * 64,
+        }},
+    }
+
+
+@pytest.mark.parametrize("base_url", [
+    "https://user:password@central.test",
+    "https://central.test/api?token=secret",
+    "http:///missing-authority",
+])
+def test_transport_rejects_secret_bearing_or_malformed_base_urls(base_url):
+    called = False
+
+    def sender(*args):
+        nonlocal called
+        called = True
+        return 200, b"{}"
+
+    with pytest.raises(TransportError) as raised:
+        HTTPTransport(base_url=base_url, sender=sender)
+    assert raised.value.kind == "malformed_target"
+    assert called is False
+
+
+def test_bearer_mode_does_not_forward_proxy_operator_credentials():
+    headers = _headers(operator="alice", token="human-token", shared_secret="proxy-secret",
+                       permissions="operate_run")
+
+    assert headers["Authorization"] == "Bearer human-token"
+    assert "X-Meta-Webui-Evolver-Operator" not in headers
+    assert "X-Meta-Webui-Evolver-Control-Secret" not in headers
+    assert "X-Meta-Webui-Evolver-Permissions" not in headers
+
+
+def test_transport_maps_optional_get_parameters_to_query_string():
+    seen = {}
+    def sender(url, method, body, headers, timeout):
+        seen.update(url=url, method=method, body=body)
+        return 200, b"{}"
+    HTTPTransport(base_url="http://central", sender=sender).action(
+        "evolver.runs.list", {"controller_id": "edge/a", "state": "paused", "limit": 10})
+    assert seen == {
+        "url": "http://central/api/evolver/runs?controller_id=edge%2Fa&state=paused&limit=10",
+        "method": "GET", "body": None,
+    }
 
 
 def _missing_route_parameters():

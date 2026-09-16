@@ -7,12 +7,12 @@ boundary and can be given a sender fixture without opening a socket.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
 import re
-from urllib.parse import quote
+from urllib.parse import quote, urlencode, urlsplit
 from http import HTTPStatus
 from typing import Any, Callable, Mapping, Protocol
 from urllib.error import HTTPError, URLError
@@ -39,6 +39,50 @@ class Route:
 
 
 _CATALOG_PATH = Path(__file__).with_name("applications") / "evolver" / "actions.json"
+
+
+@dataclass(frozen=True)
+class OperatorTarget:
+    """Resolved operator endpoint and non-secret configuration provenance."""
+
+    url: str
+    source: str
+    auth: Mapping[str, bool] = field(default_factory=dict)
+
+
+def resolve_operator_target(environ: Mapping[str, str] | None = None) -> OperatorTarget:
+    values = os.environ if environ is None else environ
+    candidates = (
+        ("META_WEBUI_METACTL_CENTRAL_URL", values.get("META_WEBUI_METACTL_CENTRAL_URL")),
+        ("META_WEBUI_EVOLVER_CONTROL_URL", values.get("META_WEBUI_EVOLVER_CONTROL_URL")),
+    )
+    source, url = next(((name, value) for name, value in candidates if value),
+                       ("default", "http://127.0.0.1:18087"))
+    return OperatorTarget(url.rstrip("/"), source, {
+        "operator": bool(values.get("META_WEBUI_METACTL_OPERATOR")),
+        "token": bool(values.get("META_WEBUI_METACTL_TOKEN")),
+        "shared_secret": bool(values.get("META_WEBUI_EVOLVER_CONTROL_SHARED_SECRET")),
+    })
+
+
+def validate_base_url(value: str) -> str:
+    """Validate an operator base URL before it can reach the network."""
+    if not isinstance(value, str) or not value:
+        raise TransportError("malformed_target", "operator target must be a non-empty HTTP(S) URL")
+    try:
+        parts = urlsplit(value)
+        hostname = parts.hostname
+        if parts.scheme.lower() not in {"http", "https"} or not parts.netloc or not hostname:
+            raise ValueError("missing HTTP(S) authority")
+        if parts.username is not None or parts.password is not None:
+            raise ValueError("credentials are not allowed in operator targets")
+        if parts.query or parts.fragment:
+            raise ValueError("query strings and fragments are not allowed in operator targets")
+        if parts.port is not None and not 0 < parts.port < 65536:
+            raise ValueError("invalid port")
+    except (ValueError, UnicodeError) as exc:
+        raise TransportError("malformed_target", "operator target must be an HTTP(S) URL without credentials") from exc
+    return value.rstrip("/")
 
 
 def action_contract(action_id: str) -> tuple[Route, dict[str, Any]]:
@@ -86,8 +130,7 @@ class TransportError(RuntimeError):
 def _normalize(status: int, payload: Json) -> Json:
     if status in {401, 403, 404, 409}:
         kinds = {401: "unauthorized", 403: "forbidden", 404: "not_found", 409: "conflict"}
-        message = payload.get("error") if isinstance(payload, Mapping) else None
-        raise TransportError(kinds[status], str(message or HTTPStatus(status).phrase), status=status)
+        raise TransportError(kinds[status], HTTPStatus(status).phrase, status=status)
     if status >= 500:
         raise TransportError("central_failure", "central control plane failure", status=status)
     if status < 200 or status >= 300:
@@ -116,12 +159,13 @@ def _headers(*, operator: str | None, token: str | None, shared_secret: str | No
     result = {"Accept": "application/json", "Content-Type": "application/json"}
     if token:
         result["Authorization"] = token if token.lower().startswith("bearer ") else f"Bearer {token}"
-    if operator:
-        result["X-Meta-Webui-Evolver-Operator"] = operator
-    if permissions:
-        result["X-Meta-Webui-Evolver-Permissions"] = permissions
-    if shared_secret:
-        result["X-Meta-Webui-Evolver-Control-Secret"] = shared_secret
+    elif operator or permissions or shared_secret:
+        if operator:
+            result["X-Meta-Webui-Evolver-Operator"] = operator
+        if permissions:
+            result["X-Meta-Webui-Evolver-Permissions"] = permissions
+        if shared_secret:
+            result["X-Meta-Webui-Evolver-Control-Secret"] = shared_secret
     return result
 
 
@@ -132,8 +176,14 @@ class InProcessTransport:
     def action(self, action_id: str, parameters: Mapping[str, Any]) -> Json:
         route, action = action_contract(action_id)
         body = None if route.method == "GET" else {"action": action_id.rsplit(".", 1)[-1], **dict(parameters)}
+        path = route.path(parameters)
+        if route.method == "GET":
+            query = [(name, value) for name, value in parameters.items()
+                     if name not in re.findall(r"\{([^{}]+)\}", route.template)]
+            if query:
+                path += "?" + urlencode(query, doseq=True)
         try:
-            response = self.dispatcher(route.method, route.path(parameters), body, self.headers)
+            response = self.dispatcher(route.method, path, body, self.headers)
             status, payload = response
             return _normalize(int(status), payload)
         except TransportError:
@@ -146,7 +196,7 @@ class HTTPTransport:
     def __init__(self, *, base_url: str, timeout: float = 10, sender: Sender | None = None,
                  operator: str | None = None, token: str | None = None,
                  shared_secret: str | None = None, permissions: str | None = None) -> None:
-        self.base_url = base_url.rstrip("/")
+        self.base_url = validate_base_url(base_url)
         self.timeout = timeout
         self.sender = sender or self._send
         self.headers = _headers(operator=operator, token=token, shared_secret=shared_secret, permissions=permissions)
@@ -154,8 +204,14 @@ class HTTPTransport:
     def action(self, action_id: str, parameters: Mapping[str, Any]) -> Json:
         route, action = action_contract(action_id)
         body = None if route.method == "GET" else {"action": action_id.rsplit(".", 1)[-1], **dict(parameters)}
+        path = route.path(parameters)
+        if route.method == "GET":
+            query = [(name, value) for name, value in parameters.items()
+                     if name not in re.findall(r"\{([^{}]+)\}", route.template)]
+            if query:
+                path += "?" + urlencode(query, doseq=True)
         try:
-            status, raw_payload = self.sender(self.base_url + route.path(parameters), route.method, body, self.headers, self.timeout)
+            status, raw_payload = self.sender(self.base_url + path, route.method, body, self.headers, self.timeout)
             status = int(status)
             try:
                 payload = _decode(raw_payload, status) if raw_payload is not None else None
@@ -166,6 +222,21 @@ class HTTPTransport:
                 else:
                     raise
             return _normalize(status, payload)
+        except TransportError:
+            raise
+        except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+            raise TransportError("network_failure", "central control plane is unavailable") from exc
+
+    def discover_actions(self) -> dict[str, Any]:
+        """Read the server's action manifest without invoking an action."""
+        try:
+            status, raw_payload = self.sender(self.base_url + "/api/actions", "GET", None,
+                                              self.headers, self.timeout)
+            payload = _decode(raw_payload, int(status)) if raw_payload is not None else None
+            result = _normalize(int(status), payload)
+            if not isinstance(result, dict):
+                raise TransportError("malformed_response", "action discovery must be a JSON object", status=int(status))
+            return result
         except TransportError:
             raise
         except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
@@ -182,11 +253,13 @@ class HTTPTransport:
 
 
 def configured_transport() -> HTTPTransport:
+    target = resolve_operator_target()
+    token = os.environ.get("META_WEBUI_METACTL_TOKEN")
     return HTTPTransport(
-        base_url=os.environ.get("META_WEBUI_METACTL_CENTRAL_URL", os.environ.get("META_WEBUI_EVOLVER_CONTROL_URL", "http://127.0.0.1:18087")),
+        base_url=target.url,
         timeout=float(os.environ.get("META_WEBUI_METACTL_TIMEOUT", "10")),
-        operator=os.environ.get("META_WEBUI_METACTL_OPERATOR"),
-        token=os.environ.get("META_WEBUI_METACTL_TOKEN"),
-        shared_secret=os.environ.get("META_WEBUI_EVOLVER_CONTROL_SHARED_SECRET"),
-        permissions=os.environ.get("META_WEBUI_METACTL_PERMISSIONS"),
+        operator=os.environ.get("META_WEBUI_METACTL_OPERATOR") if not token else None,
+        token=token,
+        shared_secret=os.environ.get("META_WEBUI_EVOLVER_CONTROL_SHARED_SECRET") if not token else None,
+        permissions=os.environ.get("META_WEBUI_METACTL_PERMISSIONS") if not token else None,
     )

@@ -1,0 +1,52 @@
+{
+  "version": "1.0.0",
+  "groups": {
+    "controllers": {
+      "commands": {
+        "list": {"action_id": "evolver.controllers.commands.list", "positionals": ["controller_id"]},
+        "show": {"action_id": "evolver.controllers.commands.show", "positionals": ["controller_id", "command_id"]},
+        "watch": {"action_id": "evolver.controllers.commands.show", "positionals": ["controller_id", "command_id"]}
+      },
+      "manual": {
+        "lease": {
+          "show": "evolver.controllers.manual.lease.show",
+          "revoke": "evolver.controllers.manual.lease.revoke",
+          "emergency-release": "evolver.controllers.manual.lease.emergency_release"
+        },
+        "command": "evolver.controllers.manual.command",
+        "stir": "evolver.controllers.manual.stir"
+      },
+      "recovery": {
+        "request": "evolver.controllers.recovery.request",
+        "status": "evolver.controllers.recovery.status",
+        "diff": "evolver.controllers.recovery.diff"
+      },
+      "release": {"set": "evolver.controllers.release.set"},
+      "list": "evolver.controllers.list",
+      "show": "evolver.controllers.show",
+      "freshness": "evolver.controllers.freshness",
+      "add": "evolver.controllers.add",
+      "adopt": {"action_id": "evolver.controllers.add", "defaults": {"purpose": "forced_adoption"}},
+      "refresh": "evolver.controllers.refresh",
+      "rescan": "evolver.controllers.rescan",
+      "archive": "evolver.controllers.archive",
+      "restore": "evolver.controllers.restore",
+      "measurements": "evolver.controllers.measurements",
+      "telemetry": "evolver.controllers.telemetry",
+      "activities": "evolver.controllers.activities",
+      "events": "evolver.controllers.events",
+      "evidence": "evolver.controllers.evidence",
+      "logs": "evolver.controllers.logs"
+    },
+    "instruments": {"list": "evolver.instruments.list", "show": "evolver.instruments.show"},
+    "runs": {
+      "list": "evolver.runs.list", "show": "evolver.runs.show",
+      "pause": "evolver.runs.pause", "resume": "evolver.runs.resume", "stop": "evolver.runs.stop"
+    },
+    "experiments": {
+      "validate": "evolver.experiments.validate", "describe": "evolver.experiments.describe",
+      "plan": "evolver.experiments.plan", "enqueue": "evolver.experiments.enqueue", "run": "evolver.experiments.run"
+    },
+    "releases": {"build": "evolver.release.build"}
+  }
+}

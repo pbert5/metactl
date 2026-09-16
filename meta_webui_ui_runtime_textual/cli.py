@@ -143,6 +143,40 @@ def _shell_args(parser: argparse.ArgumentParser) -> None:
                         help="confirm actions requiring confirmation")
 
 
+def _presentation_leaf(value: Any) -> tuple[str, dict[str, Any]] | None:
+    if isinstance(value, str):
+        return value, {}
+    if isinstance(value, Mapping) and isinstance(value.get("action_id"), str):
+        return value["action_id"], dict(value)
+    return None
+
+
+def _add_presentation(sub: Any, tree: Mapping[str, Any], actions: Mapping[str, Action]) -> None:
+    for name, value in tree.items():
+        if name in {"description", "positionals", "aliases", "defaults", "action_id"}:
+            continue
+        leaf = _presentation_leaf(value)
+        if leaf:
+            action_id, metadata = leaf
+            action = actions.get(action_id)
+            if action is None:
+                raise CLIError(f"presentation references unknown action: {action_id}")
+            command = sub.add_parser(name, aliases=list(metadata.get("aliases", [])), help=action.description)
+            _shell_args(command)
+            _parameter_args(command, action)
+            command.set_defaults(action_id=action_id)
+            continue
+        if not isinstance(value, Mapping):
+            raise CLIError(f"presentation command {name} must be an action or group")
+        group = sub.add_parser(name, help=str(value.get("description", "")) or None)
+        _shell_args(group)
+        children = {key: child for key, child in value.items()
+                    if key not in {"description", "positionals", "aliases", "defaults", "action_id"}}
+        if not isinstance(children, Mapping):
+            raise CLIError(f"presentation group {name} commands must be an object")
+        _add_presentation(group.add_subparsers(dest="presentation_command", required=True), children, actions)
+
+
 def build_parser(layout: Mapping[str, Any], actions: Mapping[str, Action] | None = None) -> argparse.ArgumentParser:
     actions = actions or actions_from_layout(layout)
     parser = argparse.ArgumentParser(prog=str(layout.get("name", "meta-webui")), description=layout.get("description"))
@@ -166,6 +200,12 @@ def build_parser(layout: Mapping[str, Any], actions: Mapping[str, Action] | None
         command = sub.add_parser(name, help=action.description)
         _shell_args(command)
         _parameter_args(command, action)
+        command.set_defaults(action_id=name)
+    presentation = layout.get("presentation", {})
+    if isinstance(presentation, Mapping):
+        groups = presentation.get("groups", presentation)
+        if isinstance(groups, Mapping):
+            _add_presentation(sub, groups, actions)
     return parser
 
 
@@ -203,7 +243,8 @@ def run_cli(layout: Mapping[str, Any] | str, registry: Mapping[str, ActionHandle
                "registry_binding": action.registry_binding,
                "parameters": action.parameters}, as_json=args.json, output=output)
         return 0
-    action = actions[args.command]
+    action_name = getattr(args, "action_id", None) or args.command
+    action = actions[action_name]
     parameters = {name: getattr(args, name) for name in action.parameters if getattr(args, name, None) is not None}
     planned = {"status": "planned", "action": action.name, "parameters": parameters}
     if not action.available or action.planned:
