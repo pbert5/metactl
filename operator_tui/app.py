@@ -31,6 +31,10 @@ SENSITIVE_PARTS = ("credential", "password", "secret", "token", "private_key", "
 class NavigationItem:
     label: str
     action_ids: tuple[str, ...] = ()
+    workbench: bool = False
+
+
+WORKBENCH_NODE = object()
 
 
 def safe_target_url(value: str) -> str:
@@ -105,23 +109,24 @@ def _action_ids(value: Any) -> list[str]:
 def load_navigation(presentation: Path, actions: Mapping[str, Mapping[str, Any]]) -> tuple[NavigationItem, ...]:
     document = json.loads(presentation.read_text(encoding="utf-8"))
     groups = document.get("groups", {})
+
     def group_ids(name: str) -> list[str]:
         return [identifier for identifier in _action_ids(groups.get(name, {})) if identifier in actions]
-    controller_ids = group_ids("controllers")
-    recovery_ids = [identifier for identifier in controller_ids if ".recovery." in identifier]
-    controller_ids = [identifier for identifier in controller_ids if identifier not in recovery_ids]
-    ids_by_prefix = lambda prefix: [identifier for identifier in actions if identifier.startswith(prefix)]
-    releases = group_ids("releases") or [identifier for identifier in actions if ".release" in identifier]
-    experiments = group_ids("experiments") or ids_by_prefix("evolver.experiments.")
+
+    controller_group = groups.get("controllers", {})
+    recovery_ids = [identifier for identifier in _action_ids(
+        controller_group.get("recovery", {}) if isinstance(controller_group, Mapping) else {}
+    ) if identifier in actions]
+    controller_ids = [identifier for identifier in group_ids("controllers") if identifier not in recovery_ids]
     return (
-        NavigationItem("Overview", ("evolver.edge.status",)),
+        NavigationItem("Overview", tuple(group_ids("overview"))),
         NavigationItem("Controllers", tuple(controller_ids)),
-        NavigationItem("Instruments", tuple(group_ids("instruments") or ids_by_prefix("evolver.instruments."))),
-        NavigationItem("Runs", tuple(group_ids("runs") or ids_by_prefix("evolver.runs."))),
-        NavigationItem("Experiments", tuple(experiments)),
-        NavigationItem("Releases", tuple(releases)),
+        NavigationItem("Instruments", tuple(group_ids("instruments"))),
+        NavigationItem("Runs", tuple(group_ids("runs"))),
+        NavigationItem("Experiments", tuple(group_ids("experiments"))),
+        NavigationItem("Releases", tuple(group_ids("releases"))),
         NavigationItem("Recovery", tuple(recovery_ids)),
-        NavigationItem("Developer/API Workbench"),
+        NavigationItem("Developer/API Workbench", workbench=True),
     )
 
 
@@ -202,8 +207,8 @@ class OperatorTUI(App[None]):
         tree = self.query_one("#navigation", Tree)
         for item in self.navigation_model:
             group = tree.root.add(item.label, expand=True, data=item.label)
-            if not item.action_ids:
-                group.add_leaf("Open API Workbench", data="api-workbench")
+            if item.workbench:
+                group.add_leaf("Open API Workbench", data=WORKBENCH_NODE)
             for action_id in item.action_ids:
                 action = self.actions[action_id]
                 planned = action["status"] != "implemented"
@@ -214,10 +219,9 @@ class OperatorTUI(App[None]):
     async def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         action_id = event.node.data
         if not isinstance(action_id, str):
-            return
-        if action_id == "api-workbench":
-            self.selected_action = None
-            self.query_one("#detail", Static).update("Developer/API Workbench\nUse: metactl api tui\nAPI Workbench is a separate application.")
+            if action_id is WORKBENCH_NODE:
+                self.selected_action = None
+                self.query_one("#detail", Static).update("Developer/API Workbench\nUse: metactl api tui\nAPI Workbench is a separate application.")
             return
         self.selected_action = self.actions[action_id]
         action = self.selected_action

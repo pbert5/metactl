@@ -1,4 +1,5 @@
 import asyncio
+import json
 from dataclasses import dataclass
 
 import pytest
@@ -9,6 +10,7 @@ from metactl_transport import OperatorTarget
 from operator_tui.app import (
     OperatorTUI,
     catalog_confirmation_label,
+    load_navigation,
     physical_evidence_label,
     redact,
     safe_target_url,
@@ -131,6 +133,28 @@ def test_navigation_uses_shared_presentation_sections_and_keeps_recovery_top_lev
         "evolver.controllers.recovery.status",
         "evolver.controllers.recovery.diff",
     )
+
+
+def test_navigation_does_not_recreate_actions_missing_from_presentation_model(tmp_path):
+    presentation = tmp_path / "metactl-cli.json"
+    presentation.write_text(json.dumps({
+        "groups": {
+            "controllers": {"show": "evolver.controllers.show"},
+            "instruments": {"show": "evolver.instruments.show"},
+        },
+    }), encoding="utf-8")
+    actions = {
+        "evolver.controllers.show": {"id": "evolver.controllers.show"},
+        "evolver.runs.show": {"id": "evolver.runs.show"},
+        "evolver.instruments.show": {"id": "evolver.instruments.show"},
+    }
+
+    navigation = load_navigation(presentation, actions)
+
+    runs = next(item for item in navigation if item.label == "Runs")
+    assert runs.action_ids == ()
+    controllers = next(item for item in navigation if item.label == "Controllers")
+    assert controllers.action_ids == ("evolver.controllers.show",)
 
 
 def test_target_and_response_redaction_preserve_shape_without_secrets():
