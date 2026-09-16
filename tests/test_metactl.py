@@ -53,7 +53,9 @@ def test_bare_metactl_is_a_successful_discovery_landing_page(capsys):
 
 def test_top_level_help_names_all_routed_entrypoints(capsys):
     module = _metactl_module()
-    assert module.main(["--help"]) == 0
+    with pytest.raises(SystemExit) as raised:
+        module.main(["--help"])
+    assert raised.value.code == 0
     output = capsys.readouterr().out
     assert "metactl doctor" in output
     assert "metactl tui" in output
