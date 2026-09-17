@@ -30,6 +30,37 @@ def test_enrollment_catalog_matches_endpoint_contract_and_preserves_controls():
     assert action["permissions"] == ["manage_controller"]
 
 
+def test_calibration_catalog_freezes_central_routes_permissions_and_od_boundary():
+    catalog = _catalog()
+    expected = {
+        "evolver.calibrations.list": ("GET", "/api/evolver/calibrations"),
+        "evolver.calibrations.workspace": ("GET", "/api/evolver/calibration-workspace"),
+        "evolver.calibrations.show": ("GET", "/api/evolver/calibrations/{calibration_id}"),
+        "evolver.calibrations.sessions.create": ("POST", "/api/evolver/calibrations/sessions"),
+        "evolver.calibrations.sessions.add_observation": ("POST", "/api/evolver/calibrations/sessions/{session_id}/observations"),
+        "evolver.calibrations.sessions.fit": ("POST", "/api/evolver/calibrations/sessions/{session_id}/fit"),
+        "evolver.calibrations.sessions.accept": ("POST", "/api/evolver/calibrations/sessions/{session_id}/accept"),
+        "evolver.calibrations.sessions.cancel": ("POST", "/api/evolver/calibrations/sessions/{session_id}/cancel"),
+        "evolver.calibrations.sessions.capture": ("POST", "/api/evolver/calibrations/sessions/{session_id}/capture"),
+        "evolver.calibrations.artifacts.deliver": ("POST", "/api/evolver/calibrations/artifacts/{artifact_id}/deliver"),
+        "evolver.calibrations.artifacts.supersede": ("POST", "/api/evolver/calibrations/artifacts/{artifact_id}/supersede"),
+        "evolver.calibrations.artifacts.invalidate": ("POST", "/api/evolver/calibrations/artifacts/{artifact_id}/invalidate"),
+        "evolver.calibrations.pump_fixtures.create": ("POST", "/api/evolver/calibrations/pump-fixtures"),
+        "evolver.calibrations.od_blanks.list": ("GET", "/api/evolver/od-blanks"),
+    }
+    assert {key: (value["method"], value["path"]) for key, value in catalog.api.items() if key in expected} == expected
+    for action_id, (method, _) in expected.items():
+        action = catalog.action(action_id)
+        assert action is not None
+        if method == "GET":
+            assert action["permissions"] == ["evolver:read"]
+            assert action["safety"]["effect"] == "read"
+        else:
+            assert action["permissions"] == ["manage_calibration"]
+            assert action["safety"]["effect"] == "mutation"
+    assert not any("od" in action_id and action_id.endswith(("fit", "accept")) for action_id in catalog.api)
+
+
 def test_operator_routes_are_catalog_owned_and_complete():
     catalog = load_action_catalog(CATALOG)
     assert operator_action_ids() == frozenset(catalog.api)
@@ -77,6 +108,25 @@ def test_enrollment_transport_forwards_endpoint_and_release_binding_fields():
             "release": "r1", "source_revision": "abcdef1", "manifest_sha256": "a" * 64,
         }},
     }
+
+
+def test_calibration_observation_transport_keeps_action_decoration_outside_observation_shape():
+    seen = {}
+
+    def sender(url, method, body, headers, timeout):
+        seen.update(url=url, method=method, body=body)
+        return 200, b"{}"
+
+    HTTPTransport(base_url="http://central", sender=sender).action(
+        "evolver.calibrations.sessions.add_observation",
+        {"session_id": "session/a", "raw_value": 1432, "reference_value": 25.0},
+    )
+    assert seen == {
+        "url": "http://central/api/evolver/calibrations/sessions/session%2Fa/observations",
+        "method": "POST",
+        "body": {"action": "add_observation", "session_id": "session/a", "raw_value": 1432, "reference_value": 25.0},
+    }
+    assert "action" not in _catalog().action("evolver.calibrations.sessions.add_observation")["parameters"]
 
 
 @pytest.mark.parametrize("base_url", [
