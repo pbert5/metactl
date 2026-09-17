@@ -34,10 +34,9 @@ def test_calibration_catalog_freezes_central_routes_permissions_and_od_boundary(
     catalog = _catalog()
     expected = {
         "evolver.calibrations.list": ("GET", "/api/evolver/calibrations"),
-        "evolver.calibrations.workspace": ("GET", "/api/evolver/calibration-workspace"),
         "evolver.calibrations.show": ("GET", "/api/evolver/calibrations/{calibration_id}"),
         "evolver.calibrations.sessions.create": ("POST", "/api/evolver/calibrations/sessions"),
-        "evolver.calibrations.sessions.add_observation": ("POST", "/api/evolver/calibrations/sessions/{session_id}/observations"),
+        "evolver.calibrations.sessions.observation": ("POST", "/api/evolver/calibrations/sessions/{session_id}/observations"),
         "evolver.calibrations.sessions.fit": ("POST", "/api/evolver/calibrations/sessions/{session_id}/fit"),
         "evolver.calibrations.sessions.accept": ("POST", "/api/evolver/calibrations/sessions/{session_id}/accept"),
         "evolver.calibrations.sessions.cancel": ("POST", "/api/evolver/calibrations/sessions/{session_id}/cancel"),
@@ -45,9 +44,8 @@ def test_calibration_catalog_freezes_central_routes_permissions_and_od_boundary(
         "evolver.calibrations.artifacts.deliver": ("POST", "/api/evolver/calibrations/artifacts/{artifact_id}/deliver"),
         "evolver.calibrations.artifacts.supersede": ("POST", "/api/evolver/calibrations/artifacts/{artifact_id}/supersede"),
         "evolver.calibrations.artifacts.invalidate": ("POST", "/api/evolver/calibrations/artifacts/{artifact_id}/invalidate"),
-        "evolver.calibrations.pump_fixtures.create": ("POST", "/api/evolver/calibrations/pump-fixtures"),
-        "evolver.calibrations.od_blanks.list": ("GET", "/api/evolver/od-blanks"),
     }
+    assert {action["id"] for action in catalog.actions if action["id"].startswith("evolver.calibrations.")} == set(expected)
     assert {key: (value["method"], value["path"]) for key, value in catalog.api.items() if key in expected} == expected
     for action_id, (method, _) in expected.items():
         action = catalog.action(action_id)
@@ -118,15 +116,15 @@ def test_calibration_observation_transport_keeps_action_decoration_outside_obser
         return 200, b"{}"
 
     HTTPTransport(base_url="http://central", sender=sender).action(
-        "evolver.calibrations.sessions.add_observation",
+        "evolver.calibrations.sessions.observation",
         {"session_id": "session/a", "raw_value": 1432, "reference_value": 25.0},
     )
     assert seen == {
         "url": "http://central/api/evolver/calibrations/sessions/session%2Fa/observations",
         "method": "POST",
-        "body": {"action": "add_observation", "session_id": "session/a", "raw_value": 1432, "reference_value": 25.0},
+        "body": {"action": "observation", "session_id": "session/a", "raw_value": 1432, "reference_value": 25.0},
     }
-    assert "action" not in _catalog().action("evolver.calibrations.sessions.add_observation")["parameters"]
+    assert "action" not in _catalog().action("evolver.calibrations.sessions.observation")["parameters"]
 
 
 @pytest.mark.parametrize("base_url", [
