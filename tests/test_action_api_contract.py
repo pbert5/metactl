@@ -30,6 +30,24 @@ def test_enrollment_catalog_matches_endpoint_contract_and_preserves_controls():
     assert action["permissions"] == ["manage_controller"]
 
 
+def test_safe_stop_catalog_is_dedicated_physical_no_lease_contract():
+    catalog = _catalog()
+    action = catalog.action("evolver.controllers.safe_stop")
+    assert action is not None
+    assert catalog.api["evolver.controllers.safe_stop"] == {
+        "method": "POST",
+        "path": "/api/evolver/controllers/{controller_id}/safe-stop",
+    }
+    assert action["permissions"] == ["operate_run"]
+    assert action["safety"]["effect"] == "hardware"
+    assert action["safety"]["confirmation"] == "physical"
+    assert action["parameters"] == {
+        "controller_id": {"type": "string", "required": True},
+        "idempotency_key": {"type": "string"},
+    }
+    assert not any(name in action["parameters"] for name in ("target", "channel", "level", "duration", "lease_token"))
+
+
 def test_calibration_catalog_freezes_central_routes_permissions_and_od_boundary():
     catalog = _catalog()
     expected = {

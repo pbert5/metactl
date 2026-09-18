@@ -38,6 +38,18 @@ def test_real_catalog_request_matches_existing_transport():
     assert "run_id" not in body
 
 
+def test_safe_stop_workbench_exposes_physical_route_without_lease_fields():
+    endpoint = repository_registry(ROOT).endpoints["evolver.controllers.safe_stop"]
+    assert endpoint.method == "POST"
+    assert endpoint.path == "/api/evolver/controllers/{controller_id}/safe-stop"
+    assert endpoint.effect == "hardware"
+    assert endpoint.parameters == {
+        "controller_id": {"in": "path", "type": "string", "required": True},
+        "idempotency_key": {"in": "body", "type": "string"},
+    }
+    assert "lease_token" not in endpoint.parameters
+
+
 def test_parameter_validation_prevents_network_and_encodes_values():
     endpoint = read_endpoint()
     assert prepare(endpoint, {"id": "a/b ?"})[0] == "/api/items/a%2Fb%20%3F?limit=5"
