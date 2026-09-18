@@ -229,6 +229,18 @@ def test_tui_detail_uses_the_shared_human_cli_presentation_path():
     assert app.cli_paths["evolver.controllers.show"] == "metactl controllers show"
 
 
+def test_safe_stop_is_discoverable_in_controllers_without_a_lease_token_parameter():
+    app = OperatorTUI(transport=FakeTransport({"evolver.controllers.safe_stop": {}}, []), target=target())
+    controllers = next(item for item in app.navigation_model if item.label == "Controllers")
+    assert "evolver.controllers.safe_stop" in controllers.action_ids
+    action = app.actions["evolver.controllers.safe_stop"]
+    assert tuple(action["parameters"]) == ("controller_id", "idempotency_key")
+    assert app.cli_paths["evolver.controllers.safe_stop"] == "metactl controllers safe-stop"
+    assert action["safety"] == {"risk": "high", "confirmation": "physical", "reversible": True, "effect": "hardware"}
+    assert "lease_token" not in action["parameters"]
+    assert "physical hardware" in catalog_confirmation_label(action["safety"])
+
+
 def test_discovery_gate_requires_live_manifest_and_blocks_catalog_drift():
     local = {"version": "1.0.0", "api": {"a": {}, "b": {}}}
     assert discovery_gate(local, {"version": "1.0.0", "actions": [{"id": "a"}, {"id": "b"}]}) == (True, "clean")

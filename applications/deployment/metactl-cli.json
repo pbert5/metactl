@@ -31,6 +31,7 @@
       "rescan": "evolver.controllers.rescan",
       "archive": "evolver.controllers.archive",
       "restore": "evolver.controllers.restore",
+      "safe-stop": "evolver.controllers.safe_stop",
       "measurements": "evolver.controllers.measurements",
       "telemetry": "evolver.controllers.telemetry",
       "activities": "evolver.controllers.activities",
