@@ -336,6 +336,7 @@ def test_operator_group_aliases_map_to_existing_catalog_actions(capsys, command,
 @pytest.mark.parametrize(("command", "action_id"), [
     (("server", "status"), "evolver.server.status"),
     (("server", "down"), "evolver.server.down"),
+    (("server", "restart"), "evolver.server.restart"),
     (("server", "restart", "controller"), "evolver.server.restart"),
     (("server", "logs", "hardware"), "evolver.server.logs"),
 ])
