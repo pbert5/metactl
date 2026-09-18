@@ -333,6 +333,31 @@ def test_operator_group_aliases_map_to_existing_catalog_actions(capsys, command,
     assert fake.calls == [(action_id, expected)]
 
 
+@pytest.mark.parametrize(("command", "action_id"), [
+    (("server", "status"), "evolver.server.status"),
+    (("server", "down"), "evolver.server.down"),
+    (("server", "restart", "controller"), "evolver.server.restart"),
+    (("server", "logs", "hardware"), "evolver.server.logs"),
+])
+def test_server_host_runtime_paths_are_catalogled_but_unavailable_to_api_client(capsys, command, action_id):
+    module = _metactl_module()
+
+    class Fake:
+        def __init__(self):
+            self.calls = []
+
+        def action(self, action, parameters):
+            self.calls.append((action, parameters))
+            return {"unexpected": True}
+
+    fake = Fake()
+    assert module.main(["--json", *command], transport=fake) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["action"] == action_id
+    assert result["reason"] == "unavailable"
+    assert fake.calls == []
+
+
 def test_adopt_is_explicitly_forced_and_confirmation_preserving(capsys):
     module = _metactl_module()
 

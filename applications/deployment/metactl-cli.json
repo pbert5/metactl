@@ -48,6 +48,15 @@
       "validate": "evolver.experiments.validate", "describe": "evolver.experiments.describe",
       "plan": "evolver.experiments.plan", "enqueue": "evolver.experiments.enqueue", "run": "evolver.experiments.run"
     },
-    "releases": {"build": "evolver.release.build"}
+    "releases": {"build": "evolver.release.build"},
+    "server": {
+      "status": "evolver.server.status",
+      "up": "evolver.server.up",
+      "stop": {"action_id": "evolver.server.stop", "positionals": ["service"]},
+      "down": "evolver.server.down",
+      "restart": {"action_id": "evolver.server.restart", "positionals": ["service"]},
+      "logs": {"action_id": "evolver.server.logs", "positionals": ["service"]},
+      "upgrade": "evolver.server.upgrade"
+    }
   }
 }
