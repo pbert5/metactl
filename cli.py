@@ -6,6 +6,7 @@ available from this server/operator CLI.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -16,75 +17,31 @@ from typing import Any, Mapping
 REPOSITORY_ROOT = Path(os.environ.get("META_WEBUI_REPOSITORY_ROOT", Path(__file__).resolve().parents[1]))
 
 try:
-    from .framework.action_catalog import ActionCatalogError, load_action_catalog
-    from .meta_webui_ui_runtime_textual.cli import run_cli
+    from .cli_runtime import build_parser, run_cli
     from .metactl_transport import TransportError, configured_transport, operator_action_ids
+    from .operator_contract import ContractError, load_snapshot
+    from .presentation import safe_target_url
 except ImportError:  # direct loading from the extracted checkout
-    from framework.action_catalog import ActionCatalogError, load_action_catalog
-    from meta_webui_ui_runtime_textual.cli import run_cli
+    from cli_runtime import build_parser, run_cli
     from metactl_transport import TransportError, configured_transport, operator_action_ids
+    from operator_contract import ContractError, load_snapshot
+    from presentation import safe_target_url
 
 
-def _catalog_paths(index_path: Path) -> list[Path]:
-    """Resolve the deployment-owned, explicit catalog references."""
-    import json
-
-    document = json.loads(index_path.read_text(encoding="utf-8"))
-    references = document.get("catalogs")
-    if not isinstance(references, list):
-        raise ActionCatalogError(f"{index_path}: catalogs must be a list of explicit references")
-    expected = document.get("deployment_index")
-    actual = [item.get("id") for item in references if isinstance(item, Mapping)]
-    if actual != expected:
-        raise ActionCatalogError(f"{index_path}: catalog references do not match deployment_index")
-    paths: list[Path] = []
-    for item in references:
-        if not isinstance(item, Mapping) or not isinstance(item.get("id"), str) or not isinstance(item.get("path"), str):
-            raise ActionCatalogError(f"{index_path}: each catalog reference requires id and path")
-        path = (index_path.parent / item["path"]).resolve()
-        applications_root = index_path.parent.parent
-        if applications_root not in path.parents:
-            raise ActionCatalogError(f"{index_path}: catalog path escapes applications directory: {item['path']}")
-        paths.append(path)
-    return paths
-
-
-def _layout_from_single_catalog(path: Path) -> dict[str, Any]:
-    catalog = load_action_catalog(path)
+def _layout(_legacy_index_path: Path | None = None) -> dict[str, Any]:
+    """Compose presentation metadata with the server-derived client snapshot."""
+    contract = load_snapshot()
+    presentation_path = Path(__file__).with_name("data") / "presentation.json"
+    presentation = json.loads(presentation_path.read_text(encoding="utf-8"))
     actions = {}
-    for action in catalog.actions:
+    for action in contract["actions"]:
         entry = dict(action)
         entry["description"] = action["title"]
         entry["available"] = action["status"] == "implemented"
         entry["planned"] = action["status"] != "implemented"
         actions[action["id"]] = entry
-    return {"name": "metactl", "description": "eVOLVER operator actions", "actions": actions}
-
-
-def _layout(index_path: Path) -> dict[str, Any]:
-    document = json.loads(index_path.read_text(encoding="utf-8"))
-    if isinstance(document.get("actions"), list):
-        return _layout_from_single_catalog(index_path)
-    actions: dict[str, Any] = {}
-    for path in _catalog_paths(index_path):
-        catalog = load_action_catalog(path)
-        for action in catalog.actions:
-            identifier = action["id"]
-            if identifier in actions:
-                raise ActionCatalogError(f"duplicate deployment action id: {identifier}")
-            entry = dict(action)
-            entry["description"] = action["title"]
-            entry["available"] = action["status"] == "implemented"
-            entry["planned"] = action["status"] != "implemented"
-            parameters = {}
-            for name, spec in action.get("parameters", {}).items():
-                parameter = dict(spec)
-                if "enum" in parameter:
-                    parameter["choices"] = parameter.pop("enum")
-                parameters[name] = parameter
-            entry["parameters"] = parameters
-            actions[identifier] = entry
-    return {"name": "metactl", "description": "Meta WebUI action catalog", "actions": actions}
+    return {"name": "metactl", "description": "eVOLVER operator actions", "actions": actions,
+            "presentation": presentation}
 
 
 def _redact(value: Any) -> Any:
@@ -94,25 +51,34 @@ def _redact(value: Any) -> Any:
                 for key, item in value.items()}
     if isinstance(value, list):
         return [_redact(item) for item in value]
+    if isinstance(value, str) and value.startswith(("http://", "https://", "//")):
+        return safe_target_url(value)
     return value
 
 
-def _registry(transport: Any) -> dict[str, Any]:
-    def enrollment_output(value: Any) -> Any:
-        if isinstance(value, dict):
-            return {key: (item if key == "enrollment_token" else "<redacted>" if key == "credential" else enrollment_output(item))
-                    for key, item in value.items()}
-        if isinstance(value, list):
-            return [enrollment_output(item) for item in value]
+def _present_command_result(value: Any) -> Any:
+    if not isinstance(value, Mapping) or not isinstance(value.get("command"), Mapping):
         return value
+    command = value["command"]
+    disposition = command.get("disposition")
+    physical = command.get("physical_actuation_verified")
+    if not isinstance(physical, bool):
+        physical = None
+    return {
+        **value,
+        "disposition": disposition,
+        "accepted_or_queued": disposition in {"accepted", "queued"},
+        "accepted": disposition == "accepted",
+        "queued": disposition == "queued",
+        "physical_actuation_verified": physical,
+    }
 
+
+def _registry(transport: Any) -> dict[str, Any]:
     def invoke(parameters: Mapping[str, Any], action_id: str) -> Any:
         try:
             result = transport.action(action_id, parameters)
-            # A one-time enrollment credential is the bounded output of this
-            # explicit operator action; every other central projection stays
-            # structurally redacted.  The token is never persisted by metactl.
-            return enrollment_output(result) if action_id == "evolver.controllers.add" else _redact(result)
+            return _present_command_result(_redact(result))
         except TransportError as error:
             return error.as_dict()
     return {action_id: (lambda params, action_id=action_id: invoke(params, action_id))
@@ -121,6 +87,10 @@ def _registry(transport: Any) -> dict[str, Any]:
 
 _HUMAN_ALIASES = {
     ("status",): "evolver.edge.status",
+    ("control", "status"): "evolver.edge.status",
+    ("control", "controllers"): "evolver.controllers.list",
+    ("control", "instruments"): "evolver.instruments.list",
+    ("control", "runs"): "evolver.runs.list",
     ("controllers", "list"): "evolver.controllers.list",
     ("controllers", "show"): "evolver.controllers.show",
     ("controllers", "freshness"): "evolver.controllers.freshness",
@@ -132,6 +102,12 @@ _HUMAN_ALIASES = {
     ("controllers", "restore"): "evolver.controllers.restore",
     ("controllers", "commands", "list"): "evolver.controllers.commands.list",
     ("controllers", "commands", "show"): "evolver.controllers.commands.show",
+    ("controllers", "manual", "lease"): "evolver.controllers.manual.lease",
+    ("controllers", "manual", "lease", "show"): "evolver.controllers.manual.lease.show",
+    ("controllers", "manual", "lease", "revoke"): "evolver.controllers.manual.lease.revoke",
+    ("controllers", "manual", "lease", "emergency-release"): "evolver.controllers.manual.lease.emergency_release",
+    ("controllers", "manual", "command"): "evolver.controllers.manual.command",
+    ("controllers", "manual", "stir"): "evolver.controllers.manual.stir",
     ("controllers", "measurements"): "evolver.controllers.measurements",
     ("controllers", "telemetry"): "evolver.controllers.telemetry",
     ("controllers", "activities"): "evolver.controllers.activities",
@@ -149,6 +125,8 @@ _HUMAN_ALIASES = {
     ("runs", "pause"): "evolver.runs.pause",
     ("runs", "resume"): "evolver.runs.resume",
     ("runs", "stop"): "evolver.runs.stop",
+    ("validation", "experiment"): "evolver.experiments.validate",
+    ("experiments", "validation"): "evolver.experiments.validate",
     ("releases", "build"): "evolver.release.build",
 }
 
@@ -191,12 +169,36 @@ def _interactive(arguments: list[str], index_path: Path, transport: Any, *, inpu
     return run_cli(layout, _registry(transport), command, input=input_stream, output=output)
 
 
-def _human_arguments(arguments: list[str]) -> list[str]:
+def _human_arguments(arguments: list[str], presentation: Mapping[str, Any] | None = None) -> list[str]:
     """Translate grouped operator syntax into stable action-id arguments."""
     leading = []
     while arguments and arguments[0] in {"--json", "--dry-run", "--yes"}:
         leading.append(arguments.pop(0))
-    for prefix, action_id in sorted(_HUMAN_ALIASES.items(), key=lambda item: -len(item[0])):
+    aliases = dict(_HUMAN_ALIASES)
+    defaults: dict[tuple[str, ...], Mapping[str, Any]] = {}
+    positionals: dict[tuple[str, ...], tuple[str, ...]] = {}
+    def collect(tree: Mapping[str, Any], prefix: tuple[str, ...] = ()) -> None:
+        for name, value in tree.items():
+            if name in {"description", "positionals", "aliases", "defaults", "action_id"}:
+                continue
+            metadata = value if isinstance(value, Mapping) else {}
+            positional_names = metadata.get("positionals") if isinstance(metadata.get("positionals"), list) else None
+            leaf = value if isinstance(value, str) else value.get("action_id") if isinstance(value, Mapping) else None
+            if isinstance(leaf, str):
+                aliases.setdefault(prefix + (name,), leaf)
+                if isinstance(value, Mapping):
+                    defaults[prefix + (name,)] = value.get("defaults", {})
+                    if positional_names is not None:
+                        positionals[prefix + (name,)] = tuple(str(item) for item in positional_names)
+            elif isinstance(value, Mapping):
+                children = value.get("commands", value)
+                if isinstance(children, Mapping):
+                    collect(children, prefix + (name,))
+    if isinstance(presentation, Mapping):
+        groups = presentation.get("groups", presentation)
+        if isinstance(groups, Mapping):
+            collect(groups)
+    for prefix, action_id in sorted(aliases.items(), key=lambda item: -len(item[0])):
         if tuple(arguments[:len(prefix)]) != prefix:
             continue
         tail = arguments[len(prefix):]
@@ -206,6 +208,10 @@ def _human_arguments(arguments: list[str]) -> list[str]:
                 raise ValueError("controllers adopt requires --purpose forced_adoption")
             if not purpose_positions:
                 tail.extend(["--purpose", "forced_adoption"])
+        for name, value in defaults.get(prefix, {}).items():
+            option = f"--{name.replace('_', '-')}"
+            if option not in tail:
+                tail.extend([option, str(value)])
 
         positional: list[str] = []
         if tail and not tail[0].startswith("-"):
@@ -214,18 +220,20 @@ def _human_arguments(arguments: list[str]) -> list[str]:
                     break
                 positional.append(value)
         if positional:
-            if action_id == "evolver.controllers.add":
-                option_names = ["--server-url"]
-            elif action_id == "evolver.controllers.commands.show":
-                option_names = ["--controller-id", "--command-id"]
-            elif action_id == "evolver.controllers.release.set":
-                option_names = ["--controller-id", "--release"]
-            elif action_id == "evolver.instruments.show":
-                option_names = ["--instrument-id"]
-            elif action_id.startswith("evolver.runs."):
-                option_names = ["--run-id"]
-            else:
-                option_names = ["--controller-id"]
+            option_names = [f"--{name.replace('_', '-')}" for name in positionals.get(prefix, ())]
+            if not option_names:
+                if action_id == "evolver.controllers.add":
+                    option_names = ["--server-url"]
+                elif action_id == "evolver.controllers.commands.show":
+                    option_names = ["--controller-id", "--command-id"]
+                elif action_id == "evolver.controllers.release.set":
+                    option_names = ["--controller-id", "--release"]
+                elif action_id == "evolver.instruments.show":
+                    option_names = ["--instrument-id"]
+                elif action_id.startswith("evolver.runs."):
+                    option_names = ["--run-id"]
+                else:
+                    option_names = ["--controller-id"]
             if len(positional) > len(option_names):
                 raise ValueError(f"too many positional arguments for {' '.join(prefix)}")
             tail = [part for value, option in zip(positional, option_names) for part in (option, value)] + tail[len(positional):]
@@ -288,12 +296,16 @@ def _watch(arguments: list[str], transport: Any, *, as_json: bool,
             break
         time.sleep(min(interval, max(0, deadline - time.monotonic())))
     terminal = disposition in _TERMINAL_DISPOSITIONS
+    physical = command.get("physical_actuation_verified") if isinstance(command, Mapping) else None
+    if not isinstance(physical, bool):
+        physical = None
     payload = {"status": "completed" if terminal else "timeout", "action": "evolver.controllers.commands.show",
                "result": {"controller_id": controller_id, "command_id": command_id,
                            "disposition": disposition, "command": result,
                            "accepted_or_queued": disposition in {"accepted", "queued"},
-                           "physical_actuation_verified": bool(
-                               isinstance(command, Mapping) and command.get("physical_actuation_verified") is True)}}
+                           "accepted": disposition == "accepted",
+                           "queued": disposition == "queued",
+                           "physical_actuation_verified": physical}}
     output = output or sys.stdout
     output.write(json.dumps(payload, sort_keys=True, default=str) + "\n")
     return 0
@@ -301,9 +313,54 @@ def _watch(arguments: list[str], transport: Any, *, as_json: bool,
 
 def main(argv: list[str] | None = None, *, transport: Any | None = None,
          input: Any | None = None, output: Any | None = None) -> int:
-    index_path = Path(__file__).with_name("applications") / "evolver" / "actions.json"
+    index_path = Path(__file__).with_name("applications") / "deployment" / "action-catalog.json"
     try:
         arguments = list(sys.argv[1:] if argv is None else argv)
+        # A bare invocation is a discovery landing page, not an incomplete
+        # action request.  Build the normal parser so help stays authoritative
+        # and does not instantiate a transport or contact central.
+        if not arguments:
+            parser = build_parser(_layout(index_path))
+            output = output or sys.stdout
+            output.write("Meta BAL operator CLI\n\n")
+            output.write("Common discovery paths:\n")
+            output.write("  metactl actions list\n")
+            output.write("  metactl interactive\n")
+            output.write("  metactl tui                 # operator TUI\n")
+            output.write("  metactl doctor\n")
+            output.write("  metactl api\n")
+            output.write("  metactl api tui --repo .    # API Workbench\n")
+            output.write("  metactl api check --repo .\n\n")
+            parser.print_help(output)
+            return 0
+        if arguments == ["--help"]:
+            output = output or sys.stdout
+            output.write("Common discovery paths: metactl doctor | metactl tui (operator TUI) | metactl api tui (API Workbench)\n\n")
+        if arguments[:1] == ["api"]:
+            try:
+                from .api_workbench.cli import main as api_main
+            except ImportError:
+                from api_workbench.cli import main as api_main
+            return api_main(arguments[1:], output=output)
+        if arguments[:1] == ["tui"]:
+            try:
+                from .operator_tui.cli import main as operator_main
+            except ImportError:
+                from operator_tui.cli import main as operator_main
+            return operator_main(arguments[1:], transport=transport, output=output)
+        if arguments[:1] == ["doctor"]:
+            parser = argparse.ArgumentParser(prog="metactl doctor",
+                                             description="run read-only operator diagnostics")
+            parser.add_argument("--format", choices=("json",), default="json")
+            parser.parse_args(arguments[1:])
+            try:
+                from .doctor import doctor_report
+            except ImportError:
+                from doctor import doctor_report
+            output = output or sys.stdout
+            json.dump(doctor_report(transport=transport), output, sort_keys=True, default=str)
+            output.write("\n")
+            return 0
         # Human-facing grouped aliases remain presentation-only; the action ID
         # is the stable contract and still drives the same explicit binding.
         chosen_transport = transport or configured_transport()
@@ -315,8 +372,9 @@ def main(argv: list[str] | None = None, *, transport: Any | None = None,
                               output=output)
         if watch_result is not None:
             return watch_result
-        return run_cli(_layout(index_path), _registry(chosen_transport), _human_arguments(arguments))
-    except (ActionCatalogError, OSError, ValueError, KeyError) as error:
+        layout = _layout(index_path)
+        return run_cli(layout, _registry(chosen_transport), _human_arguments(arguments, layout.get("presentation")))
+    except (ContractError, OSError, ValueError, KeyError) as error:
         print(f"metactl: {error}", file=sys.stderr)
         return 2
 
