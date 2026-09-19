@@ -288,6 +288,19 @@ class Session:
             raise WorkbenchError("offline catalog mode: select a server or fixture first")
         self.policy.check(endpoint, fixture=isinstance(self.client, FixtureClient), confirmation=confirmation)
         path, body, headers = prepare(endpoint, values, body, headers)
+        if endpoint.action_body and endpoint.method != "GET" and not isinstance(self.client, FixtureClient):
+            try:
+                from ..operator_contract import ContractError, ensure_mutation_compatible, load_snapshot
+            except ImportError:
+                from operator_contract import ContractError, ensure_mutation_compatible, load_snapshot
+            try:
+                status, _, raw_manifest = self.client.read("/api/actions")
+                if status != 200:
+                    raise WorkbenchError("live operator contract discovery failed before mutation")
+                live_manifest = json.loads(raw_manifest)
+                ensure_mutation_compatible(load_snapshot(), live_manifest)
+            except (ContractError, WorkbenchError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                raise WorkbenchError(f"live operator contract is incompatible; mutation is blocked") from exc
         all_headers = {**self.client.headers, **headers}
         secrets = secret_values(all_headers) + secret_values(values) + secret_values(body)
         start = time.monotonic()

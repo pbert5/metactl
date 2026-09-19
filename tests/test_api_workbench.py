@@ -94,6 +94,27 @@ def test_observed_drift_blocks_execution_before_network():
         session.execute(read_endpoint(), {"id": "a"})
 
 
+def test_operator_workbench_mutation_fails_closed_on_live_contract_drift():
+    endpoint = read_endpoint(method="POST", action_body=True, safety={"effect": "mutation"})
+    calls = []
+
+    class Client:
+        base_url = "https://central.test"
+        headers = {}
+
+        def read(self, path):
+            calls.append(("read", path))
+            return 200, {}, json.dumps({"version": "1.0.0", "revision": "stale", "actions": []}).encode()
+
+        def send(self, *args):
+            calls.append(("send", args))
+            raise AssertionError("mutation must be blocked before send")
+
+    with pytest.raises(WorkbenchError, match="contract"):
+        Session(Client(), Policy(allow_mutations=True)).execute(endpoint, {"id": "a"}, body={}, confirmation=endpoint.id)
+    assert calls == [("read", "/api/actions")]
+
+
 def test_fixture_never_falls_back_and_records_expected_error_status():
     client = FixtureClient([{"method": "GET", "path": "/api/items/a?limit=5", "status": 409, "body": {"error": "stale"}}])
     session = Session(client)
