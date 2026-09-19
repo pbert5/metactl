@@ -14,18 +14,17 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Header, Input, Label, Static, Tree
 
 try:
-    from ..framework.action_catalog import load_action_catalog
     from ..metactl_transport import OperatorTarget, TransportError, resolve_operator_target
+    from ..operator_contract import contract_drift, load_snapshot
     from ..presentation import SENSITIVE_URL_PARTS, load_presentation, presentation_paths, safe_target_url
 except ImportError:
-    from framework.action_catalog import load_action_catalog
     from metactl_transport import OperatorTarget, TransportError, resolve_operator_target
+    from operator_contract import contract_drift, load_snapshot
     from presentation import SENSITIVE_URL_PARTS, load_presentation, presentation_paths, safe_target_url
 
 
-APPLICATIONS = Path(__file__).resolve().parents[1] / "applications"
-CATALOG = APPLICATIONS / "evolver" / "actions.json"
-PRESENTATION = APPLICATIONS / "deployment" / "metactl-cli.json"
+DATA = Path(__file__).resolve().parents[1] / "data"
+PRESENTATION = DATA / "presentation.json"
 SENSITIVE_PARTS = SENSITIVE_URL_PARTS
 
 
@@ -99,6 +98,8 @@ def _present_command_result(result: Any) -> Any:
 
 def catalog_drift(local: Mapping[str, Any], discovered: Mapping[str, Any] | None) -> str:
     """Compare live discovery with the local action contract."""
+    if "revision" in local:
+        return contract_drift(local, discovered)
     if not isinstance(discovered, Mapping) or not isinstance(discovered.get("actions"), list):
         return "unavailable"
     if discovered.get("version") is None:
@@ -244,9 +245,8 @@ class OperatorTUI(App[None]):
         super().__init__()
         self.transport = transport
         self.target = target or resolve_operator_target()
-        self.catalog = load_action_catalog(CATALOG)
-        self.local_catalog = self.catalog.as_dict()
-        self.actions = {action["id"]: action for action in self.catalog.actions}
+        self.local_catalog = load_snapshot()
+        self.actions = {action["id"]: action for action in self.local_catalog["actions"]}
         self.navigation_model = load_navigation(PRESENTATION, self.actions)
         self.cli_paths = presentation_paths(load_presentation(PRESENTATION))
         self.selected_action: Mapping[str, Any] | None = None
@@ -276,7 +276,13 @@ class OperatorTUI(App[None]):
     async def probe_connection(self) -> None:
         try:
             discovered = self.transport.discover_actions()
-            allowed, status = discovery_gate(self.local_catalog, discovered)
+            gate_catalog = self.local_catalog
+            # Older test/fixture gateways predate the server-owned revision.
+            # They can still render read-only navigation; HTTP mutations are
+            # independently fenced by HTTPTransport.action().
+            if isinstance(discovered, Mapping) and not {"version", "revision"} <= set(discovered):
+                gate_catalog = {"api": self.local_catalog["api"]}
+            allowed, status = discovery_gate(gate_catalog, discovered)
             self.live_discovery = discovered
             self.discovery_status = status
             self.connection = "reachable" if allowed else "catalog drift"

@@ -3,20 +3,16 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 from typing import Any, Mapping
 
 try:
     from .metactl_transport import OperatorTarget, TransportError, configured_transport, resolve_operator_target
+    from .operator_contract import ContractError, load_snapshot
     from .presentation import safe_target_url
 except ImportError:
     from metactl_transport import OperatorTarget, TransportError, configured_transport, resolve_operator_target
+    from operator_contract import ContractError, load_snapshot
     from presentation import safe_target_url
-
-
-CATALOG = Path(__file__).with_name("applications") / "evolver" / "actions.json"
-def _read_catalog(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def doctor_report(*, transport: Any = None, target: OperatorTarget | None = None,
@@ -58,15 +54,15 @@ def doctor_report(*, transport: Any = None, target: OperatorTarget | None = None
 
     if local_catalog is None:
         try:
-            local_catalog = _read_catalog(CATALOG)
-        except (OSError, ValueError, json.JSONDecodeError):
+            local_catalog = load_snapshot()
+        except ContractError:
             local_catalog = None
     if local_catalog is None:
         report["drift"] = {"status": "not_available"}
         return report
     local_ids = set(local_catalog.get("api", {}))
     live_ids = {item.get("id") for item in actions if isinstance(item, Mapping)}
-    report["drift"] = {"status": "clean" if local_ids == live_ids and local_catalog.get("version") == discovered.get("version") else "changed",
+    report["drift"] = {"status": "clean" if local_ids == live_ids and local_catalog.get("version") == discovered.get("version") and local_catalog.get("revision") == discovered.get("revision") else "changed",
                         "local_actions": len(local_ids), "live_actions": len(live_ids)}
     return report
 

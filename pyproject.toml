@@ -14,11 +14,11 @@ metactl = "metactl.cli:main"
 meta-api-tui = "metactl.api_workbench.cli:tui_main"
 
 [tool.setuptools]
-package-dir = {"metactl" = ".", "metactl.framework" = "framework", "metactl.meta_webui_ui_runtime_textual" = "meta_webui_ui_runtime_textual", "metactl.api_workbench" = "api_workbench", "metactl.operator_tui" = "operator_tui"}
-packages = ["metactl", "metactl.framework", "metactl.meta_webui_ui_runtime_textual", "metactl.api_workbench", "metactl.operator_tui"]
+package-dir = {"metactl" = ".", "metactl.api_workbench" = "api_workbench", "metactl.operator_tui" = "operator_tui"}
+packages = ["metactl", "metactl.data", "metactl.api_workbench", "metactl.operator_tui"]
 
 [tool.setuptools.package-data]
-metactl = ["applications/**/*.json"]
+metactl = ["data/*.json"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

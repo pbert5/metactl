@@ -10,13 +10,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 import os
-from pathlib import Path
 import re
 from urllib.parse import quote, urlencode, urlsplit
 from http import HTTPStatus
 from typing import Any, Callable, Mapping, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+try:
+    from .operator_contract import ContractError, ensure_mutation_compatible, load_snapshot
+except ImportError:
+    from operator_contract import ContractError, ensure_mutation_compatible, load_snapshot
 
 
 Json = Any
@@ -36,9 +40,6 @@ class Route:
             return self.template.format(**values)
         except (KeyError, ValueError) as exc:
             raise TransportError("bad_request", f"missing route parameter: {exc}") from exc
-
-
-_CATALOG_PATH = Path(__file__).with_name("applications") / "evolver" / "actions.json"
 
 
 @dataclass(frozen=True)
@@ -86,14 +87,10 @@ def validate_base_url(value: str) -> str:
 
 
 def action_contract(action_id: str) -> tuple[Route, dict[str, Any]]:
-    """Resolve transport mechanics from the validated canonical catalog."""
-    try:
-        from .framework.action_catalog import load_action_catalog
-    except ImportError:  # checkout compatibility for the legacy tools wrapper
-        from framework.action_catalog import load_action_catalog
-    catalog = load_action_catalog(_CATALOG_PATH)
-    action = catalog.action(action_id)
-    contract = catalog.api.get(action_id)
+    """Resolve transport mechanics from the generated server-contract snapshot."""
+    contract_document = load_snapshot()
+    action = next((item for item in contract_document["actions"] if item["id"] == action_id), None)
+    contract = contract_document["api"].get(action_id)
     if action is None or contract is None:
         raise TransportError("unknown_action", f"no operator API contract for {action_id}")
     permissions = action.get("permissions", [])
@@ -102,11 +99,7 @@ def action_contract(action_id: str) -> tuple[Route, dict[str, Any]]:
 
 
 def operator_action_ids() -> frozenset[str]:
-    try:
-        from .framework.action_catalog import load_action_catalog
-    except ImportError:  # checkout compatibility for the legacy tools wrapper
-        from framework.action_catalog import load_action_catalog
-    return frozenset(load_action_catalog(_CATALOG_PATH).api)
+    return frozenset(load_snapshot()["api"])
 
 
 class Transport(Protocol):
@@ -203,8 +196,13 @@ class HTTPTransport:
 
     def action(self, action_id: str, parameters: Mapping[str, Any]) -> Json:
         route, action = action_contract(action_id)
-        body = None if route.method == "GET" else {"action": action_id.rsplit(".", 1)[-1], **dict(parameters)}
         path = route.path(parameters)
+        if route.method != "GET":
+            try:
+                ensure_mutation_compatible(load_snapshot(), self.discover_actions())
+            except ContractError as exc:
+                raise TransportError("incompatible_contract", str(exc)) from exc
+        body = None if route.method == "GET" else {"action": action_id.rsplit(".", 1)[-1], **dict(parameters)}
         if route.method == "GET":
             query = [(name, value) for name, value in parameters.items()
                      if name not in re.findall(r"\{([^{}]+)\}", route.template)]

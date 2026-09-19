@@ -17,77 +17,30 @@ from typing import Any, Mapping
 REPOSITORY_ROOT = Path(os.environ.get("META_WEBUI_REPOSITORY_ROOT", Path(__file__).resolve().parents[1]))
 
 try:
-    from .framework.action_catalog import ActionCatalogError, load_action_catalog
-    from .meta_webui_ui_runtime_textual.cli import build_parser, run_cli
+    from .cli_runtime import build_parser, run_cli
     from .metactl_transport import TransportError, configured_transport, operator_action_ids
+    from .operator_contract import ContractError, load_snapshot
     from .presentation import safe_target_url
 except ImportError:  # direct loading from the extracted checkout
-    from framework.action_catalog import ActionCatalogError, load_action_catalog
-    from meta_webui_ui_runtime_textual.cli import build_parser, run_cli
+    from cli_runtime import build_parser, run_cli
     from metactl_transport import TransportError, configured_transport, operator_action_ids
+    from operator_contract import ContractError, load_snapshot
     from presentation import safe_target_url
 
 
-def _catalog_paths(index_path: Path) -> list[Path]:
-    """Resolve the deployment-owned, explicit catalog references."""
-    import json
-
-    document = json.loads(index_path.read_text(encoding="utf-8"))
-    references = document.get("catalogs")
-    if not isinstance(references, list):
-        raise ActionCatalogError(f"{index_path}: catalogs must be a list of explicit references")
-    expected = document.get("deployment_index")
-    actual = [item.get("id") for item in references if isinstance(item, Mapping)]
-    if actual != expected:
-        raise ActionCatalogError(f"{index_path}: catalog references do not match deployment_index")
-    paths: list[Path] = []
-    for item in references:
-        if not isinstance(item, Mapping) or not isinstance(item.get("id"), str) or not isinstance(item.get("path"), str):
-            raise ActionCatalogError(f"{index_path}: each catalog reference requires id and path")
-        path = (index_path.parent / item["path"]).resolve()
-        applications_root = index_path.parent.parent.resolve()
-        if applications_root not in path.parents:
-            raise ActionCatalogError(f"{index_path}: catalog path escapes applications directory: {item['path']}")
-        paths.append(path)
-    return paths
-
-
-def _layout_from_single_catalog(path: Path) -> dict[str, Any]:
-    catalog = load_action_catalog(path)
+def _layout(_legacy_index_path: Path | None = None) -> dict[str, Any]:
+    """Compose presentation metadata with the server-derived client snapshot."""
+    contract = load_snapshot()
+    presentation_path = Path(__file__).with_name("data") / "presentation.json"
+    presentation = json.loads(presentation_path.read_text(encoding="utf-8"))
     actions = {}
-    for action in catalog.actions:
+    for action in contract["actions"]:
         entry = dict(action)
         entry["description"] = action["title"]
         entry["available"] = action["status"] == "implemented"
         entry["planned"] = action["status"] != "implemented"
         actions[action["id"]] = entry
-    return {"name": "metactl", "description": "eVOLVER operator actions", "actions": actions}
-
-
-def _layout(index_path: Path) -> dict[str, Any]:
-    document = json.loads(index_path.read_text(encoding="utf-8"))
-    if isinstance(document.get("actions"), list):
-        return _layout_from_single_catalog(index_path)
-    actions: dict[str, Any] = {}
-    for path in _catalog_paths(index_path):
-        catalog = load_action_catalog(path)
-        for action in catalog.actions:
-            identifier = action["id"]
-            if identifier in actions:
-                raise ActionCatalogError(f"duplicate deployment action id: {identifier}")
-            entry = dict(action)
-            entry["description"] = action["title"]
-            entry["available"] = action["status"] == "implemented"
-            entry["planned"] = action["status"] != "implemented"
-            parameters = {}
-            for name, spec in action.get("parameters", {}).items():
-                parameter = dict(spec)
-                parameters[name] = parameter
-            entry["parameters"] = parameters
-            actions[identifier] = entry
-    presentation_path = index_path.parent / "metactl-cli.json"
-    presentation = json.loads(presentation_path.read_text(encoding="utf-8")) if presentation_path.is_file() else {}
-    return {"name": "metactl", "description": "Meta WebUI action catalog", "actions": actions,
+    return {"name": "metactl", "description": "eVOLVER operator actions", "actions": actions,
             "presentation": presentation}
 
 
@@ -421,7 +374,7 @@ def main(argv: list[str] | None = None, *, transport: Any | None = None,
             return watch_result
         layout = _layout(index_path)
         return run_cli(layout, _registry(chosen_transport), _human_arguments(arguments, layout.get("presentation")))
-    except (ActionCatalogError, OSError, ValueError, KeyError) as error:
+    except (ContractError, OSError, ValueError, KeyError) as error:
         print(f"metactl: {error}", file=sys.stderr)
         return 2
 

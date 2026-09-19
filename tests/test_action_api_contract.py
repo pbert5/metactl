@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import re
 
 import pytest
@@ -14,6 +15,11 @@ CATALOG = Path(__file__).parents[1] / "applications/evolver/actions.json"
 
 def _catalog():
     return load_action_catalog(CATALOG)
+
+
+def _live_manifest():
+    from operator_contract import build_manifest, load_snapshot
+    return json.dumps(build_manifest(load_snapshot())).encode()
 
 
 def test_enrollment_catalog_matches_endpoint_contract_and_preserves_controls():
@@ -108,6 +114,8 @@ def test_enrollment_transport_forwards_endpoint_and_release_binding_fields():
     seen = {}
 
     def sender(url, method, body, headers, timeout):
+        if url.endswith("/api/actions"):
+            return 200, _live_manifest()
         seen.update(url=url, method=method, body=body)
         return 201, b"{}"
 
@@ -130,6 +138,8 @@ def test_calibration_observation_transport_keeps_action_decoration_outside_obser
     seen = {}
 
     def sender(url, method, body, headers, timeout):
+        if url.endswith("/api/actions"):
+            return 200, _live_manifest()
         seen.update(url=url, method=method, body=body)
         return 200, b"{}"
 

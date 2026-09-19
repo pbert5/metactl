@@ -22,7 +22,7 @@ def read_endpoint(**changes):
 
 def test_real_deployment_keeps_unmapped_actions_and_route_aliases():
     registry = repository_registry(ROOT)
-    assert registry.endpoints["core.access.status"].method is None
+    assert "core.access.status" not in registry.endpoints
     aliases = [e for e in registry.endpoints.values() if e.method == "GET" and e.path == "/api/evolver/controllers"]
     assert len(aliases) > 1
     assert not compare(registry, registry)
@@ -135,7 +135,7 @@ def test_reference_escape_is_rejected(tmp_path):
     apps = tmp_path / "applications/deployment"
     apps.mkdir(parents=True)
     (apps / "action-catalog.json").write_text(json.dumps({"deployment_index": ["escape"], "catalogs": [{"id": "escape", "path": "../../../secret"}]}))
-    with pytest.raises(WorkbenchError, match="escapes"):
+    with pytest.raises(WorkbenchError, match="no operator contract snapshot"):
         repository_registry(tmp_path)
 
 

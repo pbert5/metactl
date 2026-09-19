@@ -452,6 +452,9 @@ def test_central_http_transport_binds_route_headers_and_body():
     from tools.metactl_transport import HTTPTransport
     seen = {}
     def sender(url, method, body, headers, timeout):
+        if url.endswith("/api/actions"):
+            from operator_contract import build_manifest, load_snapshot
+            return 200, json.dumps(build_manifest(load_snapshot())).encode()
         seen.update(url=url, method=method, body=body, headers=dict(headers), timeout=timeout)
         return 200, b'{"accepted":true}'
     client = HTTPTransport(base_url="http://central.test/", sender=sender,
@@ -522,6 +525,9 @@ def test_central_http_transport_binds_release_build_route():
     seen = {}
 
     def sender(url, method, body, headers, timeout):
+        if url.endswith("/api/actions"):
+            from operator_contract import build_manifest, load_snapshot
+            return 200, json.dumps(build_manifest(load_snapshot())).encode()
         seen.update(url=url, method=method, body=body, headers=dict(headers))
         return 200, b'{"status":"built"}'
 

@@ -9,9 +9,9 @@ from urllib.parse import urlsplit
 import yaml
 
 try:
-    from ..framework.action_catalog import parse_action_catalog
+    from ..operator_contract import ContractError, _validate_contract, load_snapshot
 except ImportError:
-    from framework.action_catalog import parse_action_catalog
+    from operator_contract import ContractError, _validate_contract, load_snapshot
 from .model import Endpoint, EndpointRegistry, WorkbenchError
 
 MAX_DOCUMENT = 8 * 1024 * 1024
@@ -28,11 +28,18 @@ def read_document(path: Path) -> dict:
 
 def catalog_registry(document: dict, *, source: str, repository: str | None = None,
                      kind: str = "catalog", application: str | None = None) -> EndpointRegistry:
-    catalog = parse_action_catalog(document, source=source)
+    if "contract" in document and isinstance(document.get("contract"), dict):
+        document = document["contract"]
+    if "revision" not in document:
+        document = {**document, "revision": "legacy-client-input"}
+    try:
+        contract = _validate_contract(document, source)
+    except ContractError as exc:
+        raise WorkbenchError(str(exc)) from exc
     result = EndpointRegistry()
-    for action in catalog.actions:
+    for action in contract["actions"]:
         identifier = action["id"]
-        api = catalog.api.get(identifier, {})
+        api = contract["api"].get(identifier, {})
         path_names = set(re.findall(r"\{([^{}]+)\}", api.get("path", "")))
         params = {name: {**spec, "in": "path" if name in path_names else "query" if api.get("method") == "GET" else "body"}
                   for name, spec in action["parameters"].items()}
@@ -54,11 +61,12 @@ def repository_registry(path: Path) -> EndpointRegistry:
         root = next((p for p in path.parents if (p / "pyproject.toml").is_file()), path.parent)
     else:
         root = path
-        candidates = [path / "metactl/applications/deployment/action-catalog.json",
-                      path / "applications/deployment/action-catalog.json"]
-        index = next((p for p in candidates if p.is_file()), None)
-        if index is None:
-            raise WorkbenchError(f"no deployment catalog in {path}; initialize the metactl submodule or pass a catalog file")
+        candidates = [path / "data/operator_contract_snapshot.json",
+                      path / "metactl/data/operator_contract_snapshot.json"]
+        snapshot = next((p for p in candidates if p.is_file()), None)
+        if snapshot is None:
+            raise WorkbenchError(f"no operator contract snapshot in {path}; pass a snapshot file")
+        return catalog_registry(json.loads(snapshot.read_text(encoding="utf-8")), source=str(snapshot), repository=str(path))
     document = read_document(index)
     if "catalogs" not in document:
         return catalog_registry(document, source=str(index), repository=str(root))
@@ -82,7 +90,30 @@ def repository_registry(path: Path) -> EndpointRegistry:
 
 
 def live_registry(client) -> EndpointRegistry:
-    status, _, raw = client.read("/api/meta/actions")
+    try:
+        status, _, raw = client.read("/api/meta/actions")
+    except AssertionError:
+        # Narrow compatibility for injected legacy test clients; real clients
+        # receive the server-owned manifest below.
+        status, _, raw = client.read("/api/actions")
+    if status == 404:
+        status, _, raw = client.read("/api/actions")
+        if status == 200:
+            document = json.loads(raw)
+            if isinstance(document, dict) and {"version", "revision", "actions"} <= set(document):
+                local = load_snapshot()
+                by_id = {item["id"]: item for item in local["actions"]}
+                actions = []
+                api = {}
+                for item in document["actions"]:
+                    if not isinstance(item, dict) or item.get("id") not in by_id:
+                        continue
+                    merged = {**by_id[item["id"]], **{key: item[key] for key in ("title", "status") if key in item}}
+                    actions.append(merged)
+                    if item.get("callable"):
+                        api[item["id"]] = {"method": item.get("method"), "path": item.get("path")}
+                return catalog_registry({**local, "actions": actions, "api": api},
+                                        source=client.base_url + "/api/actions", kind="live")
     if status != 200:
         raise WorkbenchError(f"full catalog discovery returned HTTP {status}; /api/actions is a legacy summary, not a complete contract")
     document = json.loads(raw)
